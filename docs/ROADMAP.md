@@ -165,7 +165,7 @@
 | 1 | 未实现的配置项：`input.auto_pair.blacklist`、`temp_pinyin.z_include_on_commit`、各 `*accent_color` / `mode_accent_border`、`ui.font.gdi_*` / `menu_*`、`ui.theme.editor_auto_start`、`features.stats.retain_days`、`alpha_providers.*` | [deferred-config-features.md](deferred-config-features.md) |
 | 2 | 代码默认与出厂数据不一致：`chinese_pairs`（代码有「」『』、数据没有）、`english_pairs` 的 `<>`、`url.prefixes` 的 `bbs.` | 同上 |
 | 3 | 设置端页面：兼容（按应用）页、辅助码来源行 | `design/compat-settings-ui.md`、`design/aux-code-settings-ui.md`（设置界面在外部仓 `moodflow-setting`） |
-| 4 | 内置符号组文件 `data/system.symbols.toml` | `design/text-mapping-tables.md`（未实施） |
+| 4 | 多表与用户自定义文本映射 | `design/text-mapping-tables.md`；内置符号表 P1（符号标记、希腊字母）已实现，按表配置与用户编辑仍待后续阶段 |
 | 5 | 方案级用户数据 | `design/schema-scoped-user-data.md`（设计草案，待拍板） |
 
 ### 6.7 陪伴（Hub）侧

@@ -313,6 +313,38 @@ pub fn parse_upstream(
     out
 }
 
+/// 解析本仓维护的符号映射表（`system.symbols.toml`）。
+///
+/// 每个 group 的键和值保留 TOML 声明顺序以外的稳定排序语义：同键合并仍由
+/// `write_emoji_wemj` 按输入顺序保序，单键符号按表中字符串顺序输出。
+pub fn parse_symbols_toml(content: &str) -> anyhow::Result<Vec<(String, Vec<String>)>> {
+    #[derive(serde::Deserialize)]
+    struct SymbolsFile {
+        group: Vec<SymbolGroup>,
+    }
+    #[derive(serde::Deserialize)]
+    struct SymbolGroup {
+        name: String,
+        entries: std::collections::BTreeMap<String, String>,
+    }
+
+    let parsed: SymbolsFile = toml::from_str(content)?;
+    let mut rows = Vec::new();
+    for group in parsed.group {
+        if group.name.trim().is_empty() {
+            anyhow::bail!("system.symbols.toml contains an unnamed group");
+        }
+        for (key, values) in group.entries {
+            let emojis: Vec<String> = values.split_whitespace().map(str::to_string).collect();
+            if key.trim().is_empty() || emojis.is_empty() {
+                anyhow::bail!("system.symbols.toml contains an empty key or symbol list");
+            }
+            rows.push((key, emojis));
+        }
+    }
+    Ok(rows)
+}
+
 /// 加载 emoji 扩展表：优先 mmap `.wemj` 缓存，不新鲜则从上游 txt 重建。
 ///
 /// - `tables`：要解析的上游文本表，**按顺序合并**（先 `emoji_word.txt` 后
@@ -359,6 +391,16 @@ pub fn load_or_build(
             continue; // 分类表可选，缺了不算失败
         }
         match std::fs::read_to_string(t) {
+            Ok(s) if t.extension().is_some_and(|ext| ext == "toml") => {
+                match parse_symbols_toml(&s) {
+                    Ok(symbols) => rows.extend(
+                        symbols
+                            .into_iter()
+                            .map(|(key, values)| (normalize(&key), values)),
+                    ),
+                    Err(e) => warn!("解析 emoji 符号表失败 {}: {}", t.display(), e),
+                }
+            }
             Ok(s) => rows.extend(parse_upstream(&s, &normalize)),
             Err(e) => warn!("读取 emoji 表失败 {}: {}", t.display(), e),
         }
@@ -432,6 +474,60 @@ mod tests {
             Some("🏅 🎖️ 🥇"),
             "两侧 emoji 都在、保序、且重复项去掉"
         );
+    }
+
+    #[test]
+    fn parses_grouped_system_symbols_toml() {
+        let rows = parse_symbols_toml(
+            r#"
+                [[group]]
+                name = "标记"
+                [group.entries]
+                "勾选" = "✅ ✔️ ☑️"
+
+                [[group]]
+                name = "希腊字母"
+                [group.entries]
+                "阿尔法" = "α Α"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("勾选".into(), vec!["✅".into(), "✔️".into(), "☑️".into()]),
+                ("阿尔法".into(), vec!["α".into(), "Α".into()])
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_system_symbols_toml_is_rejected() {
+        assert!(parse_symbols_toml("[[group]]\nname='empty'\n[group.entries]\nkey=''\n").is_err());
+    }
+
+    #[test]
+    fn bundled_system_symbols_toml_is_valid_and_nonempty() {
+        let rows = parse_symbols_toml(include_str!("../../../../data/system.symbols.toml"))
+            .expect("出厂符号表格式有效");
+        assert!(rows.len() >= 20);
+        assert!(rows.iter().any(|(key, _)| key == "勾选"));
+        assert!(rows.iter().any(|(key, _)| key == "阿尔法"));
+    }
+
+    #[test]
+    fn toml_symbol_source_builds_and_looks_up_through_cache() {
+        let g = tempdir::Guard::new("wemj-symbols");
+        let source = g.path().join("system.symbols.toml");
+        let cache = g.path().join("symbols.wemj");
+        std::fs::write(
+            &source,
+            "[[group]]\nname='symbols'\n[group.entries]\n\"勾选\"='✅ ✔️'\n",
+        )
+        .unwrap();
+
+        let reader = load_or_build(&[source], &[], &cache, str::to_string).unwrap();
+        assert_eq!(reader.lookup("勾选"), Some("✅ ✔️"));
     }
 
     /// 合并保**序**：先到的排前面（与 `sort_by` 的稳定性一同构成「先到先得」）。

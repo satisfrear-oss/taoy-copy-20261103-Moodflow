@@ -339,8 +339,10 @@ fn plan_emoji_insertions(
     min_chars: usize,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Vec<(usize, Vec<String>)> {
-    let mut seen: std::collections::HashSet<String> =
-        candidates.iter().map(|c| c.text.clone()).collect();
+    let mut seen: std::collections::HashSet<String> = candidates
+        .iter()
+        .map(|c| emoji_dedup_key(&c.text))
+        .collect();
     let mut picks: Vec<(usize, Vec<String>)> = Vec::new();
     for (i, c) in candidates.iter().enumerate().take(max_hosts) {
         if c.is_emoji_suggestion || c.text.chars().count() < min_chars {
@@ -357,7 +359,7 @@ fn plan_emoji_insertions(
             if picked.len() >= max_per_word {
                 break;
             }
-            if seen.insert(e.to_string()) {
+            if seen.insert(emoji_dedup_key(e)) {
                 picked.push(e.to_string());
             }
         }
@@ -366,6 +368,10 @@ fn plan_emoji_insertions(
         }
     }
     picks
+}
+
+fn emoji_dedup_key(text: &str) -> String {
+    text.chars().filter(|&ch| ch != '\u{fe0f}').collect()
 }
 
 /// `show_as = "tail"` 的插入点：**最后一条常用候选之后**，且不越过任何放宽补充的候选。
@@ -5422,6 +5428,18 @@ mod plan_emoji_tests {
             vec!["😊".to_string(), "🙂".to_string(), "😁".to_string()],
             "已在候选里的 😄 应被跳过"
         );
+    }
+
+    #[test]
+    fn emoji_variants_with_and_without_vs16_are_deduplicated() {
+        let variants = |_: &str| Some("🏅️ 🏅 🎖️".to_string());
+        let v = [c("奖项")];
+        let got = plan_emoji_insertions(&v, true, 1, 3, 2, variants);
+        assert_eq!(got[0].1, vec!["🏅️".to_string(), "🎖️".to_string()]);
+
+        let existing = [c("奖项"), c("🏅")];
+        let got = plan_emoji_insertions(&existing, true, 1, 3, 2, variants);
+        assert_eq!(got[0].1, vec!["🎖️".to_string()]);
     }
 
     /// 两个宿主命中同一个 emoji 时只给一条。

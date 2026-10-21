@@ -4087,7 +4087,13 @@ impl Coordinator {
             warn!("emoji 词表缺失（data/emoji/emoji_word.txt），扩展不可用；运行 gen-data 下载");
             return None;
         };
-        let mut tables = vec![word];
+        let mut tables = Vec::new();
+        if let Some(symbols) = Config::resolve_data_file(dd, "system.symbols.toml") {
+            tables.push(symbols);
+        } else {
+            warn!("内置符号表缺失（data/system.symbols.toml）");
+        }
+        tables.push(word);
         if categories {
             match Config::resolve_data_file(dd, "emoji/emoji_category.txt") {
                 Some(p) => tables.push(p),
