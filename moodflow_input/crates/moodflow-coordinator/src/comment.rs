@@ -1189,20 +1189,29 @@ impl crate::coordinator::Coordinator {
     /// emoji 既进候选又进注释）。功能关、表没加载、没命中一律 `None`；调用点把它换成空串，
     /// 模板据此整段消失。
     fn emoji_comment_of(&self, text: &str) -> Option<String> {
-        let (max_per_word, min_chars) = {
+        {
             let rt = self.rt();
             let e = &rt.config.input.emoji;
-            if !e.enabled || e.show_as != "comment" || e.max_per_word == 0 {
+            if !e.enabled || e.show_as != "comment" {
                 return None;
             }
-            (e.max_per_word, e.min_word_chars)
-        };
-        if text.chars().count() < min_chars {
-            return None;
         }
         let guard = self.emoji_dict.read().unwrap_or_else(|e| e.into_inner());
-        let list = guard.as_ref()?.lookup(text)?;
-        let picked: Vec<&str> = list.split_whitespace().take(max_per_word).collect();
+        let mut picked: Vec<&str> = Vec::new();
+        for table in guard.iter() {
+            if text.chars().count() < table.min_chars {
+                continue;
+            }
+            if let Some(list) = table.reader.lookup(text) {
+                for symbol in list.split_whitespace().take(table.max_per_word) {
+                    if !picked.iter().any(|s| {
+                        s.trim_end_matches('\u{fe0f}') == symbol.trim_end_matches('\u{fe0f}')
+                    }) {
+                        picked.push(symbol);
+                    }
+                }
+            }
+        }
         if picked.is_empty() {
             None
         } else {

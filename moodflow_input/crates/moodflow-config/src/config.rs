@@ -4441,27 +4441,41 @@ pub struct EmojiConfig {
     /// `comment` 档求值，否则配了 `after` 又在模板里写 `${emoji}` 会两处都出。
     #[serde(default = "default_emoji_show_as")]
     pub show_as: String,
-    /// 一个词最多产出几个 emoji。
-    ///
-    /// 实测上游 `emoji_word.txt` 平均 1.09 个/键、最多 4 个 —— 本闸门对它**几乎不触发**；
-    /// 真正要拦的是分类表（`emoji_category.txt` 平均 9 个、最多 90 个「动物」）。
-    #[serde(default = "default_emoji_max_per_word")]
-    pub max_per_word: usize,
-    /// 对候选列表的前几个候选做扩展。
-    ///
-    /// 出厂 1（只扩首选）：这是把「候选序号漂移」控制住的主要手段——rime 那边的干扰感，
-    /// 根源正是它对每个候选都扩。
-    #[serde(default = "default_emoji_max_hosts")]
-    pub max_hosts: usize,
-    /// 宿主候选至少要有几个字才触发。出厂 2：单字词（「一」→ 1️⃣）噪音最大且最没用。
-    #[serde(default = "default_emoji_min_word_chars")]
-    pub min_word_chars: usize,
-    /// 是否加载分类表（`emoji_category.txt`：「动物」→ 90 个 emoji 那种）。
-    ///
-    /// 出厂关：干扰几乎全部集中在这 166 条上。但它也是「我想找个动物表情」时唯一好用的
-    /// 入口，故做成独立开关而不是不引入。
-    #[serde(default)]
-    pub categories: bool,
+    /// 挂载表数组；顺序即合并优先级，每张表的阈值定义在文件自身 `[meta]`。
+    #[serde(default = "default_emoji_tables")]
+    pub tables: Vec<EmojiTableConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmojiTableConfig {
+    pub id: String,
+    pub path: String,
+    #[serde(default = "default_emoji_table_enabled")]
+    pub enabled: bool,
+}
+
+fn default_emoji_table_enabled() -> bool {
+    true
+}
+
+fn default_emoji_tables() -> Vec<EmojiTableConfig> {
+    vec![
+        EmojiTableConfig {
+            id: "symbols".into(),
+            path: "system.symbols.toml".into(),
+            enabled: true,
+        },
+        EmojiTableConfig {
+            id: "word".into(),
+            path: "emoji/emoji_word.txt".into(),
+            enabled: true,
+        },
+        EmojiTableConfig {
+            id: "category".into(),
+            path: "emoji/emoji_category.txt".into(),
+            enabled: false,
+        },
+    ]
 }
 
 fn default_emoji_scope() -> String {
@@ -4470,26 +4484,13 @@ fn default_emoji_scope() -> String {
 fn default_emoji_show_as() -> String {
     "after".to_string()
 }
-fn default_emoji_max_per_word() -> usize {
-    3
-}
-fn default_emoji_max_hosts() -> usize {
-    1
-}
-fn default_emoji_min_word_chars() -> usize {
-    2
-}
-
 impl Default for EmojiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             scope: default_emoji_scope(),
             show_as: default_emoji_show_as(),
-            max_per_word: default_emoji_max_per_word(),
-            max_hosts: default_emoji_max_hosts(),
-            min_word_chars: default_emoji_min_word_chars(),
-            categories: false,
+            tables: default_emoji_tables(),
         }
     }
 }
@@ -8199,6 +8200,45 @@ impl Config {
         Self::migrate_font_size_follow_theme_value(layer);
         Self::migrate_langbar_badge_colors_value(layer);
         Self::migrate_tooltip_sections_value(layer);
+        Self::migrate_emoji_tables_value(layer);
+    }
+
+    /// Legacy per-layer switch becomes the category table's enabled flag. Explicit new arrays win.
+    fn migrate_emoji_tables_value(layer: &mut toml::Value) {
+        let Some(emoji) = layer
+            .get_mut("input")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|input| input.get_mut("emoji"))
+            .and_then(toml::Value::as_table_mut)
+        else {
+            return;
+        };
+        let legacy_categories = emoji.remove("categories").and_then(|v| v.as_bool());
+        if emoji.contains_key("tables") || legacy_categories.is_none() {
+            return;
+        }
+        let categories = legacy_categories.unwrap_or(false);
+        let tables = [
+            ("symbols", "system.symbols.toml", true),
+            ("word", "emoji/emoji_word.txt", true),
+            ("category", "emoji/emoji_category.txt", categories),
+        ];
+        emoji.insert(
+            "tables".into(),
+            toml::Value::Array(
+                tables
+                    .into_iter()
+                    .map(|(id, path, enabled)| {
+                        toml::Value::try_from(EmojiTableConfig {
+                            id: id.into(),
+                            path: path.into(),
+                            enabled,
+                        })
+                        .expect("emoji table config serializes")
+                    })
+                    .collect(),
+            ),
+        );
     }
 
     /// 存量迁移（**层内**、须在反序列化前跑）：`[ui.tooltip]` 的六个旧开关 → `sections`。
@@ -9833,6 +9873,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn emoji_categories_legacy_switch_migrates_per_layer() {
+        let mut legacy: toml::Value = toml::from_str("[input.emoji]\ncategories = true\n").unwrap();
+        Config::migrate_user_layer_value(&mut legacy);
+        let tables = legacy["input"]["emoji"]["tables"].as_array().unwrap();
+        assert_eq!(tables.len(), 3);
+        assert_eq!(tables[2]["id"].as_str(), Some("category"));
+        assert_eq!(tables[2]["enabled"].as_bool(), Some(true));
+        assert!(legacy["input"]["emoji"].get("categories").is_none());
+
+        let mut explicit: toml::Value = toml::from_str(
+            "[input.emoji]\ncategories = true\n[[input.emoji.tables]]\nid='custom'\npath='custom.toml'\nenabled=true\n",
+        ).unwrap();
+        Config::migrate_user_layer_value(&mut explicit);
+        assert_eq!(
+            explicit["input"]["emoji"]["tables"][0]["id"].as_str(),
+            Some("custom")
+        );
+    }
+
+    #[test]
     fn codetable_wildcard_folds_from_schema_and_validates_key() {
         let g = CodetableGlobal::default();
         assert!(!g.wildcard, "出厂关闭");
@@ -9950,8 +10010,14 @@ mod tests {
     fn emoji_config_ships_disabled() {
         let d = EmojiConfig::default();
         assert!(!d.enabled, "出厂必须关闭");
-        assert!(!d.categories, "分类表干扰最大，出厂不加载");
-        assert_eq!(d.max_hosts, 1, "只扩首选是控制候选序号漂移的主要手段");
+        assert!(
+            !d.tables
+                .iter()
+                .find(|t| t.id == "category")
+                .unwrap()
+                .enabled
+        );
+        assert!(d.tables.iter().find(|t| t.id == "symbols").unwrap().enabled);
     }
 
     /// ★ 语法模型的默认值必须是「什么都不发生」：`weight = 0` **且** `model` 为空。

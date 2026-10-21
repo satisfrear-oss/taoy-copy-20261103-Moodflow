@@ -334,37 +334,40 @@ fn sole_non_emoji(candidates: &[Candidate]) -> Option<&Candidate> {
 fn plan_emoji_insertions(
     candidates: &[Candidate],
     exact_only: bool,
-    max_hosts: usize,
-    max_per_word: usize,
-    min_chars: usize,
-    lookup: impl Fn(&str) -> Option<String>,
+    tables: &[crate::coordinator::EmojiTableReader],
 ) -> Vec<(usize, Vec<String>)> {
     let mut seen: std::collections::HashSet<String> = candidates
         .iter()
         .map(|c| emoji_dedup_key(&c.text))
         .collect();
     let mut picks: Vec<(usize, Vec<String>)> = Vec::new();
-    for (i, c) in candidates.iter().enumerate().take(max_hosts) {
-        if c.is_emoji_suggestion || c.text.chars().count() < min_chars {
-            continue;
-        }
-        if exact_only && (c.is_prefix || c.is_partial) {
-            continue;
-        }
-        let Some(list) = lookup(&c.text) else {
-            continue;
-        };
-        let mut picked = Vec::new();
-        for e in list.split_whitespace() {
-            if picked.len() >= max_per_word {
-                break;
+    for table in tables {
+        for (i, c) in candidates.iter().enumerate().take(table.max_hosts) {
+            if c.is_emoji_suggestion || c.text.chars().count() < table.min_chars {
+                continue;
             }
-            if seen.insert(emoji_dedup_key(e)) {
-                picked.push(e.to_string());
+            if exact_only && (c.is_prefix || c.is_partial) {
+                continue;
             }
-        }
-        if !picked.is_empty() {
-            picks.push((i, picked));
+            let Some(list) = table.reader.lookup(&c.text) else {
+                continue;
+            };
+            let mut picked = Vec::new();
+            for e in list.split_whitespace() {
+                if picked.len() >= table.max_per_word {
+                    break;
+                }
+                if seen.insert(emoji_dedup_key(e)) {
+                    picked.push(e.to_string());
+                }
+            }
+            if !picked.is_empty() {
+                if let Some((_, merged)) = picks.iter_mut().find(|(idx, _)| *idx == i) {
+                    merged.extend(picked);
+                } else {
+                    picks.push((i, picked));
+                }
+            }
         }
     }
     picks
@@ -625,37 +628,24 @@ impl Coordinator {
     /// 打架——用户按下键时，「下一条」可能正是刚插进来的那个 emoji。这个交互得先在真机
     /// 上定下来，不能凭空实现。
     pub(crate) fn apply_emoji_suggestions(&self, candidates: &mut Vec<Candidate>) {
-        let (scope, show_as, max_per_word, max_hosts, min_chars) = {
+        let (scope, show_as) = {
             let rt = self.rt();
             let e = &rt.config.input.emoji;
             if !e.enabled {
                 return;
             }
-            (
-                e.scope.clone(),
-                e.show_as.clone(),
-                e.max_per_word,
-                e.max_hosts,
-                e.min_word_chars,
-            )
+            (e.scope.clone(), e.show_as.clone())
         };
         // `comment` 档不进候选——它由注释模板的 `${emoji}` 变量呈现，是另一条通路。
-        if scope == "off" || show_as == "comment" || max_per_word == 0 {
+        if scope == "off" || show_as == "comment" {
             return;
         }
         let guard = self.emoji_dict.read().unwrap_or_else(|e| e.into_inner());
-        let Some(dict) = guard.as_ref() else {
+        if guard.is_empty() {
             return;
-        };
+        }
         // 未知值按最保守的一档处理（值域告警在 `sync_emoji_dict` 里发，热路径不重复告警）。
-        let picks = plan_emoji_insertions(
-            candidates,
-            scope != "all",
-            max_hosts,
-            max_per_word,
-            min_chars,
-            |t| dict.lookup(t).map(str::to_string),
-        );
+        let picks = plan_emoji_insertions(candidates, scope != "all", &guard);
         if picks.is_empty() {
             return;
         }
@@ -5348,6 +5338,8 @@ mod plan_emoji_tests {
     //! emoji 插入规划：选宿主、查表、去重、截断。
     use super::plan_emoji_insertions;
     use moodflow_candidate::Candidate;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT_TABLE: AtomicUsize = AtomicUsize::new(0);
 
     fn c(text: &str) -> Candidate {
         Candidate {
@@ -5362,19 +5354,41 @@ mod plan_emoji_tests {
             ..Default::default()
         }
     }
-    /// 词表：只认「开心」「动物」两个词。
-    fn table(t: &str) -> Option<String> {
-        match t {
-            "开心" => Some("😄 😊 🙂 😁".into()),
-            "动物" => Some("🐶 🐱".into()),
-            _ => None,
+    fn table(
+        rows: &[(&str, &str)],
+        max_hosts: usize,
+        max_per_word: usize,
+        min_chars: usize,
+    ) -> crate::coordinator::EmojiTableReader {
+        let tag = NEXT_TABLE.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "moodflow_emoji_plan_{}_{}",
+            std::process::id(),
+            tag
+        ));
+        let source = base.with_extension("txt");
+        let cache = base.with_extension("wemj");
+        let body = rows
+            .iter()
+            .map(|(k, v)| format!("{k}\t{k} {v}\n"))
+            .collect::<String>();
+        std::fs::write(&source, body).unwrap();
+        let reader =
+            moodflow_dict::emojidict::load_or_build(&[source], &[], &cache, str::to_string)
+                .unwrap();
+        crate::coordinator::EmojiTableReader {
+            max_per_word,
+            max_hosts,
+            min_chars,
+            reader,
         }
     }
 
     #[test]
     fn extends_first_host_only_by_default() {
         let v = [c("开心"), c("动物")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(got.len(), 1, "max_hosts=1 只扩首选");
         assert_eq!(got[0].0, 0);
     }
@@ -5386,10 +5400,12 @@ mod plan_emoji_tests {
     #[test]
     fn max_hosts_is_a_window_not_a_quota() {
         let v = [c("无表词"), c("开心")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert!(got.is_empty(), "窗口内首条没命中就不产出，不该顺延到第二条");
         // 窗口放大到 2 才轮得到「开心」。
-        let got = plan_emoji_insertions(&v, true, 2, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 2, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, 1);
     }
@@ -5397,7 +5413,8 @@ mod plan_emoji_tests {
     #[test]
     fn truncates_to_max_per_word() {
         let v = [c("开心")];
-        let got = plan_emoji_insertions(&v, true, 1, 2, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 2, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(got[0].1, vec!["😄".to_string(), "😊".to_string()]);
     }
 
@@ -5405,7 +5422,7 @@ mod plan_emoji_tests {
     fn skips_short_words() {
         let v = [c("开心")];
         assert!(
-            plan_emoji_insertions(&v, true, 1, 3, 3, table).is_empty(),
+            plan_emoji_insertions(&v, true, &[table(&[("开心", "😄")], 1, 3, 3)]).is_empty(),
             "min_chars=3 时两字词不触发"
         );
     }
@@ -5414,15 +5431,17 @@ mod plan_emoji_tests {
     #[test]
     fn exact_scope_skips_prefix_candidates() {
         let v = [prefix("开心")];
-        assert!(plan_emoji_insertions(&v, true, 1, 3, 2, table).is_empty());
-        assert_eq!(plan_emoji_insertions(&v, false, 1, 3, 2, table).len(), 1);
+        let tables = [table(&[("开心", "😄")], 1, 3, 2)];
+        assert!(plan_emoji_insertions(&v, true, &tables).is_empty());
+        assert_eq!(plan_emoji_insertions(&v, false, &tables).len(), 1);
     }
 
     /// 词库里本来就有那个 emoji 时不再重复给一条。
     #[test]
     fn does_not_duplicate_existing_candidate() {
         let v = [c("开心"), c("😄")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(
             got[0].1,
             vec!["😊".to_string(), "🙂".to_string(), "😁".to_string()],
@@ -5432,25 +5451,33 @@ mod plan_emoji_tests {
 
     #[test]
     fn emoji_variants_with_and_without_vs16_are_deduplicated() {
-        let variants = |_: &str| Some("🏅️ 🏅 🎖️".to_string());
+        let variants = [table(&[("奖项", "🏅️ 🏅 🎖️")], 1, 3, 2)];
         let v = [c("奖项")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, variants);
+        let got = plan_emoji_insertions(&v, true, &variants);
         assert_eq!(got[0].1, vec!["🏅️".to_string(), "🎖️".to_string()]);
 
         let existing = [c("奖项"), c("🏅")];
-        let got = plan_emoji_insertions(&existing, true, 1, 3, 2, variants);
+        let got = plan_emoji_insertions(&existing, true, &variants);
         assert_eq!(got[0].1, vec!["🎖️".to_string()]);
+    }
+
+    #[test]
+    fn table_order_controls_priority_and_dedup_across_tables() {
+        let symbols = table(&[("勾选", "✅ ✔️")], 3, 5, 2);
+        let upstream = table(&[("勾选", "✅️ ☑️")], 1, 3, 2);
+        let got = plan_emoji_insertions(&[c("勾选")], true, &[symbols, upstream]);
+        assert_eq!(
+            got[0].1,
+            vec!["✅".to_string(), "✔️".to_string(), "☑️".to_string()]
+        );
     }
 
     /// 两个宿主命中同一个 emoji 时只给一条。
     #[test]
     fn dedups_across_hosts() {
-        let dup = |t: &str| match t {
-            "甲词" | "乙词" => Some("🌟".to_string()),
-            _ => None,
-        };
+        let dup = [table(&[("甲词", "🌟"), ("乙词", "🌟")], 2, 3, 2)];
         let v = [c("甲词"), c("乙词")];
-        let got = plan_emoji_insertions(&v, true, 2, 3, 2, dup);
+        let got = plan_emoji_insertions(&v, true, &dup);
         assert_eq!(got.len(), 1, "第二个宿主的重复 emoji 被去掉后不产出空条目");
         assert_eq!(got[0].0, 0);
     }
@@ -5461,7 +5488,7 @@ mod plan_emoji_tests {
         let mut e = c("开心");
         e.is_emoji_suggestion = true;
         let v = [e];
-        assert!(plan_emoji_insertions(&v, true, 1, 3, 2, table).is_empty());
+        assert!(plan_emoji_insertions(&v, true, &[table(&[("开心", "😄")], 1, 3, 2)]).is_empty());
     }
 }
 

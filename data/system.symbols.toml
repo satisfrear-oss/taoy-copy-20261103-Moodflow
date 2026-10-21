@@ -1,5 +1,10 @@
 # Moodflow maintained text mappings. MIT licensed.
 
+[meta]
+max_per_word = 5
+max_hosts = 3
+min_chars = 2
+
 [[group]]
 name = "标记"
 [group.entries]
