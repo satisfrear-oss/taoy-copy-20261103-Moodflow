@@ -1280,6 +1280,8 @@ pub(crate) struct SchemaToggleOrigin {
 }
 
 /// 中央协调器
+type EmojiLoadSpec = (bool, Vec<(String, String)>);
+
 pub struct Coordinator {
     pub(crate) state: Mutex<State>,
     pub(crate) push_server: Arc<PushServer>,
@@ -1394,7 +1396,7 @@ pub struct Coordinator {
     ///
     /// 只记**影响加载结果**的两项：`show_as` / `max_per_word` 这些是查询期参数，改了不必
     /// 重建 mmap。判据写宽了会让每次 reload 都重解析一遍 4600 行词表。
-    pub(crate) emoji_spec: Mutex<Option<(bool, Vec<(String, String)>)>>,
+    pub(crate) emoji_spec: Mutex<Option<EmojiLoadSpec>>,
     /// 「辅助码触发键被音节分隔符占用」的告警是否已发过（每方案一次，随
     /// `invalidate_aux_code_table` 复位）。见 `handle_aux_code::warn_aux_code_key_taken`。
     pub(crate) aux_code_key_warned: std::sync::atomic::AtomicBool,
@@ -4167,14 +4169,12 @@ impl Coordinator {
                 continue;
             };
             let mut meta = EmojiTableMeta::default_for(id);
-            if source.extension().is_some_and(|e| e == "toml") {
-                if let Ok(content) = std::fs::read_to_string(&source) {
-                    if let Ok(parsed) = toml::from_str::<EmojiTableFile>(&content) {
-                        if let Some(m) = parsed.meta {
-                            meta = m;
-                        }
-                    }
-                }
+            if source.extension().is_some_and(|e| e == "toml")
+                && let Ok(content) = std::fs::read_to_string(&source)
+                && let Ok(parsed) = toml::from_str::<EmojiTableFile>(&content)
+                && let Some(m) = parsed.meta
+            {
+                meta = m;
             }
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
