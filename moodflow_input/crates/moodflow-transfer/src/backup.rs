@@ -180,6 +180,15 @@ pub fn create_backup(
         serde_json::Value::Null,
     )?;
 
+    let emoji_user = store.export_emoji_user_jsonl()?;
+    add(
+        &mut w,
+        "userdata/emoji.jsonl".into(),
+        emoji_user.as_bytes(),
+        "emoji",
+        serde_json::Value::Null,
+    )?;
+
     // 补全学习数据（邮箱后缀词频 + 网址历史）：同样是键不带方案的全局段。
     // 一个文件装两类（jsonl 每行自带 kind），而不是两个文件——备份包里多一个文件就多
     // 一处要在 create / restore / RESTORE_SECTIONS 三处同步登记的地方，而 common_chars
@@ -442,6 +451,13 @@ pub fn restore_backup(
                 store.import_common_chars_jsonl(&text())?;
                 restored.push(e.path.clone());
             }
+            "emoji" => {
+                if replace && cleared.insert("emoji".into()) {
+                    store.clear_emoji_user_entries()?;
+                }
+                store.import_emoji_user_jsonl(&text())?;
+                restored.push(e.path.clone());
+            }
             "completion" => {
                 if replace && cleared.insert("completion".into()) {
                     // 两个分区都清：备份包里的这一个文件装的就是两类，只清一类会让
@@ -671,6 +687,52 @@ mod tests {
                 .1,
             1
         );
+    }
+
+    #[test]
+    fn emoji_user_overrides_are_backed_up_and_restored_by_section() {
+        let t = tempfile::tempdir().unwrap();
+        let src = open_store(t.path(), "emoji-src");
+        src.hide_emoji_for_word("勾选", "✅").unwrap();
+        let pkg = t.path().join("emoji.zip");
+        let result = create_backup(
+            &src,
+            &empty_sources(),
+            &pkg,
+            "0.0.0",
+            "test",
+            "2026-09-19T00:00:00Z",
+            &BackupOptions {
+                include_stats: false,
+                include_state: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|entry| entry == "userdata/emoji.jsonl")
+        );
+
+        let dst = open_store(t.path(), "emoji-dst");
+        dst.hide_emoji_for_word("本机", "❌").unwrap();
+        let sections = vec!["emoji".to_string()];
+        let restored = restore_backup(
+            &pkg,
+            &dst,
+            &empty_targets(),
+            crate::merge::Strategy::Replace,
+            Some(&sections),
+        )
+        .unwrap();
+        assert!(
+            restored
+                .restored
+                .iter()
+                .any(|entry| entry == "userdata/emoji.jsonl")
+        );
+        assert_eq!(dst.list_emoji_user_entries().unwrap()[0].word, "勾选");
     }
 
     /// 造一份最小可用的 wdat 字节流（供下面两条「替换后不得复用旧 reader」用）。

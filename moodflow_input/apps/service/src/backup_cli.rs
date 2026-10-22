@@ -28,6 +28,7 @@ const RESTORE_SECTIONS: &[&str] = &[
     "common_chars",
     "charset",
     "completion",
+    "emoji",
     "schemas",
     "themes",
     "state",

@@ -331,10 +331,11 @@ fn sole_non_emoji(candidates: &[Candidate]) -> Option<&Candidate> {
 ///   放大噪音；
 /// - 去重集合**起手装入全部既有候选文本**：词库里本来就收了那个 emoji 时不再重复给一条，
 ///   多个宿主命中同一个 emoji 时也只给一条。
-fn plan_emoji_insertions(
+fn plan_emoji_insertions_with_hidden(
     candidates: &[Candidate],
     exact_only: bool,
     tables: &[crate::coordinator::EmojiTableReader],
+    hidden: &std::collections::HashSet<String>,
 ) -> Vec<(usize, Vec<String>)> {
     let mut seen: std::collections::HashSet<String> = candidates
         .iter()
@@ -352,10 +353,15 @@ fn plan_emoji_insertions(
             let Some(list) = table.reader.lookup(&c.text) else {
                 continue;
             };
+            let host_prefix = format!("{}\0", c.text);
             let mut picked = Vec::new();
             for e in list.split_whitespace() {
                 if picked.len() >= table.max_per_word {
                     break;
+                }
+                let hidden_key = format!("{host_prefix}{}", emoji_dedup_key(e));
+                if hidden.contains(&hidden_key) {
+                    continue;
                 }
                 if seen.insert(emoji_dedup_key(e)) {
                     picked.push(e.to_string());
@@ -406,10 +412,11 @@ fn emoji_tail_insert_at(candidates: &[Candidate]) -> usize {
 /// 三处下游依赖——引擎侧 `decide_auto_commit` 按 `code == input` 筛码表子集判唯一，词频
 /// 读写两端要求码非空，`AutoCommit` 只认 `source == CodeTable` 的显示首选。给它编个码
 /// 会同时破坏这三处。
-fn make_emoji_candidate(text: String) -> Candidate {
+fn make_emoji_candidate(text: String, host: String) -> Candidate {
     Candidate {
         text,
         is_emoji_suggestion: true,
+        emoji_host: host,
         ..Default::default()
     }
 }
@@ -645,7 +652,8 @@ impl Coordinator {
             return;
         }
         // 未知值按最保守的一档处理（值域告警在 `sync_emoji_dict` 里发，热路径不重复告警）。
-        let picks = plan_emoji_insertions(candidates, scope != "all", &guard);
+        let hidden = self.emoji_hidden.read().unwrap_or_else(|e| e.into_inner());
+        let picks = plan_emoji_insertions_with_hidden(candidates, scope != "all", &guard, &hidden);
         if picks.is_empty() {
             return;
         }
@@ -655,9 +663,10 @@ impl Coordinator {
             // 落点判据见 `emoji_tail_insert_at`。
             let at = emoji_tail_insert_at(candidates);
             let mut k = 0;
-            for (_, es) in picks {
+            for (host_index, es) in picks {
+                let host = candidates[host_index].text.clone();
                 for e in es {
-                    candidates.insert(at + k, make_emoji_candidate(e));
+                    candidates.insert(at + k, make_emoji_candidate(e, host.clone()));
                     k += 1;
                 }
             }
@@ -665,8 +674,9 @@ impl Coordinator {
             // `after`：紧随宿主。**从后往前**插入，否则前面插入会把后面记下的下标
             // 全部顶偏一位。
             for (i, es) in picks.into_iter().rev() {
+                let host = candidates[i].text.clone();
                 for (k, e) in es.into_iter().enumerate() {
-                    candidates.insert(i + 1 + k, make_emoji_candidate(e));
+                    candidates.insert(i + 1 + k, make_emoji_candidate(e, host.clone()));
                 }
             }
         }
@@ -4465,6 +4475,31 @@ impl Coordinator {
         let cand = state.candidates[idx].clone();
         let word = cand.text.clone();
 
+        if cand.is_emoji_suggestion {
+            if !matches!(op, CandidateOp::Delete) {
+                return;
+            }
+            if !cand.emoji_host.is_empty()
+                && let Some(store) = &self.store
+            {
+                match store.hide_emoji_for_word(&cand.emoji_host, &cand.text) {
+                    Ok(_) => {
+                        let symbol: String =
+                            cand.text.chars().filter(|&ch| ch != '\u{fe0f}').collect();
+                        self.emoji_hidden
+                            .write()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(format!("{}\0{}", cand.emoji_host, symbol));
+                        state.direct_aux_prev = None;
+                        self.update_candidates(&mut state);
+                        self.notify_ui_update(&state);
+                    }
+                    Err(err) => warn!("隐藏 emoji 建议失败: {err}"),
+                }
+            }
+            return;
+        }
+
         // 常用/生僻标记落在全局字级的覆盖表，**不需要词库落点**，故必须分派在下面那道
         // 作用域准入之前。放在后面的话，临拼/临英/混输/空码浏览态下菜单给了入口而写端
         // 直接 return —— 用户点得动、毫无反应、没有任何日志，是最难查的一类错配。
@@ -5336,10 +5371,18 @@ mod sole_non_emoji_tests {
 #[cfg(test)]
 mod plan_emoji_tests {
     //! emoji 插入规划：选宿主、查表、去重、截断。
-    use super::plan_emoji_insertions;
+    use super::plan_emoji_insertions_with_hidden;
     use moodflow_candidate::Candidate;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT_TABLE: AtomicUsize = AtomicUsize::new(0);
+
+    fn plan_emoji_insertions(
+        candidates: &[Candidate],
+        exact_only: bool,
+        tables: &[crate::coordinator::EmojiTableReader],
+    ) -> Vec<(usize, Vec<String>)> {
+        plan_emoji_insertions_with_hidden(candidates, exact_only, tables, &Default::default())
+    }
 
     fn c(text: &str) -> Candidate {
         Candidate {
@@ -5489,6 +5532,17 @@ mod plan_emoji_tests {
         e.is_emoji_suggestion = true;
         let v = [e];
         assert!(plan_emoji_insertions(&v, true, &[table(&[("开心", "😄")], 1, 3, 2)]).is_empty());
+    }
+
+    #[test]
+    fn hidden_symbol_is_scoped_to_its_host_and_ignores_fe0f() {
+        let tables = [table(&[("勾选", "✅️"), ("完成", "✅")], 2, 5, 2)];
+        let hidden = std::collections::HashSet::from(["勾选\0✅".to_string()]);
+        let got =
+            plan_emoji_insertions_with_hidden(&[c("勾选"), c("完成")], true, &tables, &hidden);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, 1, "同一符号对另一个宿主仍可见");
+        assert_eq!(got[0].1, ["✅"]);
     }
 }
 
@@ -7645,7 +7699,9 @@ mod expand_stop_tests {
     /// 常用 / 生僻各取 `n` 个真实汉字：常用取出厂 `common_han.yaml` 名单里 CJK 基本区的头部，
     /// 生僻取 U+4E00 起**不在名单里**的字（该类 `outside: rare`：汉字域内名单外即生僻）。
     fn common_and_rare(dir: &Path, n: usize) -> (Vec<char>, Vec<char>) {
-        let yaml = std::fs::read_to_string(dir.join("charsets/common_han.yaml")).unwrap();
+        let yaml = std::fs::read_to_string(dir.join("charsets/common_han.yaml"))
+            .unwrap()
+            .replace("\r\n", "\n");
         let body = yaml
             .split("\n...\n")
             .nth(1)

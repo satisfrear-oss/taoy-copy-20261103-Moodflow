@@ -1392,6 +1392,8 @@ pub struct Coordinator {
     /// 常驻内存与启动开销都是零。这是 `.wemj` 走 mmap 的同一条理由的延伸：本表按需读页，
     /// 常驻内存与库大小基本无关，但「不加载」比「加载得很省」还要省。
     pub(crate) emoji_dict: std::sync::RwLock<Vec<EmojiTableReader>>,
+    /// 按「宿主词 + NUL + FE0F 归一后的符号」索引的隐藏覆盖，避免在候选热路径扫 redb。
+    pub(crate) emoji_hidden: std::sync::RwLock<std::collections::HashSet<String>>,
     /// 上次生效的 emoji 加载配置，`sync_emoji_dict` 的去重依据。
     ///
     /// 只记**影响加载结果**的两项：`show_as` / `max_per_word` 这些是查询期参数，改了不必
@@ -2726,6 +2728,7 @@ impl Coordinator {
             // 空初值 + 下面 new() 里的 sync_emoji_dict 首次加载：与注释库/拆字字体同一套
             // 「声明式变更」写法，启动与后续 reload 走**同一条**代码路径。
             emoji_dict: std::sync::RwLock::new(Vec::new()),
+            emoji_hidden: std::sync::RwLock::new(std::collections::HashSet::new()),
             emoji_spec: Mutex::new(None),
             aux_code_key_warned: std::sync::atomic::AtomicBool::new(false),
             quick_formats,
@@ -4059,6 +4062,7 @@ impl Coordinator {
     /// 失败不记录 ⇒ 下次 sync 会重试，于是用户补跑 `gen-data` 后不必改配置就能生效；
     /// 重试成本只是解析一次路径后发现文件不在，可以忽略。
     pub(crate) fn sync_emoji_dict(&self) {
+        self.refresh_emoji_hidden();
         let (enabled, tables) = {
             let rt = self.rt();
             let e = &rt.config.input.emoji;
@@ -4119,6 +4123,27 @@ impl Coordinator {
         if ok {
             *self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner()) = Some(spec);
         }
+    }
+
+    pub(crate) fn refresh_emoji_hidden(&self) {
+        let mut hidden = std::collections::HashSet::new();
+        if let Some(store) = &self.store {
+            let entries = match store.list_emoji_user_entries() {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!("读取 emoji 用户覆盖失败: {err}");
+                    return;
+                }
+            };
+            for entry in entries {
+                for symbol in entry.hidden {
+                    let normalized: String =
+                        symbol.chars().filter(|&ch| ch != '\u{fe0f}').collect();
+                    hidden.insert(format!("{}\0{}", entry.word, normalized));
+                }
+            }
+        }
+        *self.emoji_hidden.write().unwrap_or_else(|e| e.into_inner()) = hidden;
     }
 
     /// 实际加载 emoji 表：解析路径 → 繁简归一 → 建/复用 `.wemj` 缓存 → mmap。

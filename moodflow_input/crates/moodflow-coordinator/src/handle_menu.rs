@@ -2402,6 +2402,25 @@ impl Coordinator {
             });
             return;
         }
+        if cand.is_emoji_suggestion {
+            let items = vec![
+                M::leaf(
+                    "不再显示此符号",
+                    op(CandidateOp::Delete),
+                    self.store.is_some() && !cand.emoji_host.is_empty(),
+                    false,
+                ),
+                M::separator(),
+                M::leaf("复制", MenuKind::Copy, true, false),
+            ];
+            self.mark_menu_open(page_local, word);
+            let _ = self.ui_tx.send(UiCommand::ShowCandidateMenu {
+                items,
+                anchor: MenuAnchor::at_point(x, y),
+            });
+            return;
+        }
+
         // 常用/生僻标记：作用域是**全局的那个字**，与词库落点无关，故对上面那两类
         // 「只有复制」的状态同样成立——它只要求 `cand.text` 是**单个可登记的字符**
         // （`is_markable`：空白与控制字符以外全放行）。issue #83 起不再限定汉字：
