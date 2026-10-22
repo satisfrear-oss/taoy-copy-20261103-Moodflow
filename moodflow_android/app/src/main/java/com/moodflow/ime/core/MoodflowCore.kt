@@ -60,6 +60,9 @@ class MoodflowCore private constructor(private var handle: Long) : AutoCloseable
 
     fun clearComposition(): KeyOutcome = Wire.outcome(N.nativeClearComposition(handle))
 
+    fun t9Segmentations(input: String, limit: Int): List<String> =
+        N.nativeT9Segmentations(handle, input, limit)?.toList().orEmpty()
+
     // ── 剪贴板历史：核心那份（`clipboard_history.json`，与 Windows 同一存储与闸门）──
 
     /** 键盘可见期间读到的一次剪贴板变化；收不收由核心定（开关、隐私、敏感、空白、过长）。 */
@@ -109,16 +112,15 @@ class MoodflowCore private constructor(private var handle: Long) : AutoCloseable
 
 /** 九宫格切分（无状态）。 */
 object T9Native {
-    fun segmentations(input: String, limit: Int): List<String> =
-        if (input.isEmpty() || !N.ensureLoaded()) emptyList()
-        else N.nativeT9Segmentations(input, limit)?.toList().orEmpty()
+    fun segmentations(core: MoodflowCore, input: String, limit: Int): List<String> =
+        if (input.isEmpty()) emptyList() else core.t9Segmentations(input, limit)
 
-    fun leading(input: String): List<String> =
+    fun leading(input: String, position: Int): List<String> =
         if (input.isEmpty() || !N.ensureLoaded()) emptyList()
-        else N.nativeT9Leading(input)?.toList().orEmpty()
+        else N.nativeT9Leading(input, position)?.toList().orEmpty()
 
-    fun pin(input: String, syllable: String): String? =
-        if (!N.ensureLoaded()) null else N.nativeT9Pin(input, syllable)
+    fun pin(input: String, position: Int, syllable: String): String? =
+        if (!N.ensureLoaded()) null else N.nativeT9Pin(input, position, syllable)
 }
 
 /** Buffer（`moodflow_mobile::buffer::MobileBuffer`）。凭据留在 Rust 侧，这里只报目标与结果。 */

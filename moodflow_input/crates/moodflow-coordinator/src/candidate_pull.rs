@@ -55,6 +55,23 @@ pub struct CandidateWindow {
 }
 
 impl Coordinator {
+    /// 查询一串编码的首选候选排序键，不改当前组字或候选状态。
+    ///
+    /// 移动端九宫格用它比较同一数字串的多个拼音切分。
+    pub fn preview_candidate_quality(&self, input: &str) -> Option<(i32, i32, i32)> {
+        self.engine_mgr
+            .convert(input, 1)
+            .candidates
+            .first()
+            .map(|candidate| {
+                (
+                    candidate.weight,
+                    candidate.base_order,
+                    candidate.natural_order,
+                )
+            })
+    }
+
     /// 读取候选全量的一个窗口。**纯读**，不改任何状态。
     ///
     /// `limit` 会被压到 [`MAX_WINDOW`]；`offset` 越界时返回空 `items`（但 `total`

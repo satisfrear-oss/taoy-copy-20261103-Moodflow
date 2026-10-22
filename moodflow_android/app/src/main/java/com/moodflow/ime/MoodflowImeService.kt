@@ -776,12 +776,7 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
 
     // ── 九宫格 ──────────────────────────────────────────────────
 
-    /**
-     * 按当前九宫格串重算：取第一种切分整体替换核心里的组字（`moodflow_mobile::t9`）。
-     *
-     * TODO(P3): 多种切分之间的取舍目前只看段数与字典序，应改为按引擎候选质量排序；部分上屏后剩余
-     * 数字串与核心组字的同步也未处理（上屏即清空九宫格串）。
-     */
+    /** 按引擎首选候选质量选切分，并整体替换核心里的组字；部分上屏后的数字串同步另见 A12。 */
     private fun refreshT9() {
         val c = engine() ?: return
         if (t9.isEmpty) {
@@ -791,9 +786,9 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
             render()
             return
         }
-        spellingChoices = T9Native.leading(t9.text)
+        spellingChoices = T9Native.leading(t9.text, t9.activeSegmentIndex)
         spellingPage = 0
-        val query = T9Native.segmentations(t9.query, T9_SEGMENTATIONS).firstOrNull()
+        val query = T9Native.segmentations(c, t9.query, T9_SEGMENTATIONS).firstOrNull()
         if (query == null) {
             // 没有合法切分：清掉组字，编码栏直接显示数字串
             applyOutcome(c.clearComposition())
@@ -806,7 +801,7 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
 
     private fun chooseSpelling(index: Int) {
         val syllable = spellingChoices.getOrNull(index) ?: return
-        T9Native.pin(t9.text, syllable)?.let { t9.replaceWith(it) }
+        T9Native.pin(t9.text, t9.activeSegmentIndex, syllable)?.let { t9.replaceWith(it) }
         spellingOpen = false
         refreshT9()
     }

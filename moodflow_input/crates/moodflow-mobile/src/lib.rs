@@ -426,6 +426,13 @@ impl MobileCore {
         out
     }
 
+    /// 按当前拼音引擎的首选候选权重排列九宫格切分。
+    pub fn ranked_t9_segmentations(&self, input: &str, limit: usize) -> Vec<String> {
+        t9::ranked_segmentations(input, limit, |spelling| {
+            self.coord.preview_candidate_quality(spelling)
+        })
+    }
+
     /// 下达引擎命令。状态变化经 [`MobileEventSink::on_status`] 异步回报，不在此处同步返回
     /// ——同一个变化也可能由按键或焦点事件引发，只留推送一条路，宿主才不会有两份真值。
     pub fn run_command(&self, cmd: MobileCommand) {

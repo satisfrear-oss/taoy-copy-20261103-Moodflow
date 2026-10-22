@@ -15,6 +15,9 @@ class T9Input {
 
     val isEmpty: Boolean get() = text.isEmpty()
 
+    /** 当前待选音节的位置；每个显式分隔符开始一个新位置。 */
+    val activeSegmentIndex: Int get() = text.count { it == '\'' }
+
     /** 按数字键。非 `2`–`9` 忽略并返回 `false`。 */
     fun pressDigit(d: Char): Boolean {
         if (d !in '2'..'9') return false

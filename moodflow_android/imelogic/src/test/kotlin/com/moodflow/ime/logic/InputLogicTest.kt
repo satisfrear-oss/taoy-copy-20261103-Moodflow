@@ -78,6 +78,15 @@ class T9InputTest {
     }
 
     @Test
+    fun activeSegmentFollowsExplicitBoundaries() {
+        val t = T9Input()
+        t.replaceWith("ni'426")
+        assertEquals(1, t.activeSegmentIndex)
+        t.pressSeparator()
+        assertEquals(2, t.activeSegmentIndex)
+    }
+
+    @Test
     fun keypadLabels() {
         assertEquals("PQRS", T9Input.LETTERS['7'])
         assertEquals(8, T9Input.LETTERS.size)

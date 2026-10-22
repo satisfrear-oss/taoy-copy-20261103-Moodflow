@@ -65,9 +65,9 @@ object MoodflowNative {
     @JvmStatic external fun nativeClearComposition(handle: Long): Array<String>?
 
     // ── 九宫格（无状态）──
-    @JvmStatic external fun nativeT9Segmentations(input: String, limit: Int): Array<String>?
-    @JvmStatic external fun nativeT9Leading(input: String): Array<String>?
-    @JvmStatic external fun nativeT9Pin(input: String, syllable: String): String?
+    @JvmStatic external fun nativeT9Segmentations(handle: Long, input: String, limit: Int): Array<String>?
+    @JvmStatic external fun nativeT9Leading(input: String, position: Int): Array<String>?
+    @JvmStatic external fun nativeT9Pin(input: String, position: Int, syllable: String): String?
 
     // ── Buffer ──
     @JvmStatic external fun nativeBufferNew(capacity: Int): Long
