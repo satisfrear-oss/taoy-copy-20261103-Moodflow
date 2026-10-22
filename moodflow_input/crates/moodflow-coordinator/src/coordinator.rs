@@ -3207,13 +3207,26 @@ impl Coordinator {
     /// 快照，并按 `password_force_english_for_pid`（per-app 规则优先，否则全局开关）决定是否
     /// 强制英文抑制（密码框场景）。
     pub(crate) fn apply_input_diag(&self, pid: u32, disabled: bool, reason_byte: u8, mask: u64) {
+        self.apply_input_diag_for_app(pid, disabled, reason_byte, mask, None);
+    }
+
+    pub(crate) fn apply_input_diag_for_app(
+        &self,
+        pid: u32,
+        disabled: bool,
+        reason_byte: u8,
+        mask: u64,
+        app_override: Option<&str>,
+    ) {
         use std::sync::atomic::Ordering::Relaxed;
         // 展示原因 = mask/disabled 推导，再叠加 DLL 上报的 reason_byte 里「context 级禁用」这一档：
         // DLL 把 context 级 KEYBOARD_DISABLED 折进了 mask 的 IS_PASSWORD 位，折位前的区分只有
         // 它知道（见 `reason_from_report`）。reason 只管展示与提示语，**不参与**下面的抑制决策
         // ——抑制仍只看 mask，两种来源行为一致，避免「双重来源」歧义。
         let reason = crate::input_diag::reason_from_report(disabled, reason_byte, mask);
-        let name = if pid != 0 {
+        let name = if let Some(app) = app_override.filter(|app| !app.is_empty()) {
+            app.to_lowercase()
+        } else if pid != 0 {
             self.cached_proc_name((pid as u64) << 32)
         } else {
             String::new()

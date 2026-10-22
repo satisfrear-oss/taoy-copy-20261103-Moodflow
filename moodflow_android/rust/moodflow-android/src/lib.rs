@@ -199,14 +199,16 @@ pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeKeyDown(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeFocusGained(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
     is_private: jboolean,
+    host_app: JString,
 ) {
+    let host_app = get_string(&mut env, &host_app);
     guard((), || {
         if let Some(c) = session(handle) {
-            c.focus_gained_with(is_private != JNI_FALSE);
+            c.focus_gained_with(is_private != JNI_FALSE, &host_app);
         }
     });
 }

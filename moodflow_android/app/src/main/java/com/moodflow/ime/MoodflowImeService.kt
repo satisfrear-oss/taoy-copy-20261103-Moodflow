@@ -210,7 +210,7 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
         storeAvailable = c.userStoreAvailable()
         refreshSchemas()
         readCoreConfig()
-        if (tracker.current != null) c.focusGained(policy.isPrivate)
+        if (tracker.current != null) c.focusGained(policy.isPrivate, currentInputEditorInfo?.packageName.orEmpty())
         if (KeyboardChoice.isChord(layoutPref) || layoutPref == KeyboardChoice.NINE_KEY) ensurePinyinSchema()
         render()
     }
@@ -275,7 +275,7 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
         if (!policy.allowBuffer || change == FieldChange.NEW_FIELD) bufferMode = false
         if (change == FieldChange.NEW_FIELD) closePanels()
 
-        core?.focusGained(policy.isPrivate)
+        core?.focusGained(policy.isPrivate, attribute.packageName.orEmpty())
         restoreSettings()
         uppercase = false
         numeric = policy.prefersNumberPad

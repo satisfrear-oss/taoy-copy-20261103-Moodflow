@@ -318,6 +318,18 @@ fn coordinator_events_reach_hub() {
         _ => unreachable!(),
     }
 
+    // Android Hub 以包名上报焦点（client token 没有 PID）：同一内置名单必须排除感知和日常统计。
+    coord.handle_focus_gained(&focus(0, "COM.MOODFLOW.IME", 0));
+    match hub.until(|u| matches!(u, Up::Focus { .. })).0 {
+        Up::Focus { app, blocked, .. } => {
+            assert_eq!(app, None, "命中排除名单时不应把应用名发给 Hub");
+            assert!(blocked, "Hub 自身输入必须命中内置排除");
+        }
+        _ => unreachable!(),
+    }
+    coord.handle_focus_gained(&focus(4242, "Notepad.exe", 0));
+    let _ = hub.until(|u| matches!(u, Up::Focus { .. }));
+
     // 两个字母：key 先于 comp，第二个键 in_comp
     coord.handle_key_event_policed(&key(VK_A));
     match hub.recv() {

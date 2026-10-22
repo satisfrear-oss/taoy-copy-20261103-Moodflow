@@ -358,18 +358,13 @@ impl MobileCore {
 
     /// 焦点获得（对应 Android `onStartInput`），普通字段。
     pub fn focus_gained(&self) {
-        self.focus_gained_with(false);
+        self.focus_gained_with(false, "");
     }
 
-    /// 焦点获得，并告知是否**私密字段**（密码、可见密码、宿主要求不学习）。
+    /// 焦点获得，并告知是否私密字段及宿主应用包名。
     ///
-    /// 私密时按 TSF 宿主报密码框的同一条路走（`IS_PASSWORD` 位 + 输入态上报），核心据此
-    /// 关掉 Moodflow 采集闸门并按 `input.password_force_english` 强制英文。非私密时同样上报一次，
-    /// 把上一个字段留下的密码态清掉——只在私密时报，离开密码框后会一直停在强制英文。
-    ///
-    /// ⚠ 核心目前没有「本字段不学习但允许中文」的开关，所以 Android 宿主对私密字段**完全绕过
-    /// 引擎**直接上屏（见 `moodflow_android` 的 `FieldPolicy`）；这里的上报是第二道闸。
-    pub fn focus_gained_with(&self, private: bool) {
+    /// 私密字段按 TSF 同一条 `IS_PASSWORD` 路径上报；宿主包名供核心排除 Hub 自身输入统计与感知采集。
+    pub fn focus_gained_with(&self, private: bool, host_app: &str) {
         let mask = if private { PASSWORD_SCOPE_MASK } else { 0 };
         let _ = self.coord.handle_focus_gained(&FocusData {
             x: 0,
@@ -382,14 +377,12 @@ impl MobileCore {
             disabled: false,
             reason: 0,
             caret_source: caret_source::TSF_SELECTION,
-            bundle_id: String::new(),
+            bundle_id: host_app.to_lowercase(),
             // 移动端没有窗口类概念，恒空；空串的语义是「不知道焦点在哪」，
             // 消费端据此保持现状（见 AppCompat::initial_mode_applies_to_window）。
             window_class: String::new(),
         });
-        // reason 2 = 宿主报密码（与 TSF 侧同值），0 = 无
-        let reason = if private { 2 } else { 0 };
-        self.coord.handle_input_state_report(0, false, reason, mask);
+        // `handle_focus_gained` 已带上完整输入态；重复发 input_state 会丢掉无 PID 宿主的包名。
     }
 
     /// 焦点丢失（对应 Android `onFinishInput`）。Thread 语义 = 真正离开，清输入态。

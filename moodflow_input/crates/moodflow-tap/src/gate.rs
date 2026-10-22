@@ -15,8 +15,8 @@ pub const DEFAULT_BLOCKLIST: &[&str] = &[
     "mstsc.exe",
 ];
 
-/// 内置排除，不随黑名单修改（FR-SEN-05“内置排除”）：在 Hub 里打的字不再进入感知。
-pub const BUILTIN_EXCLUDED: &[&str] = &["moodflow_hub.exe"];
+/// 内置排除，不随黑名单修改（FR-SEN-05“内置排除”）：Hub 自身输入不进入感知。
+pub const BUILTIN_EXCLUDED: &[&str] = &["moodflow_hub.exe", "com.moodflow.ime"];
 
 const RELAXED: Ordering = Ordering::Relaxed;
 
@@ -285,8 +285,13 @@ mod tests {
         let f = AppFilter::new::<&str>(&[], &[]);
         assert!(f.blocked(Some("moodflow_hub.exe")));
         assert!(f.blocked(Some("Moodflow_Hub.EXE")));
+        assert!(f.blocked(Some("com.moodflow.ime")));
         let f = AppFilter::new(&[], &["*"]);
         assert!(f.blocked(Some("moodflow_hub.exe")), "白名单放不开内置排除");
+        assert!(
+            f.blocked(Some("com.moodflow.ime")),
+            "白名单放不开 Android Hub 内置排除"
+        );
     }
 
     #[test]

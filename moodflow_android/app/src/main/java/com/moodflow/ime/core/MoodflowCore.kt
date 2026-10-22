@@ -26,7 +26,7 @@ class MoodflowCore private constructor(private var handle: Long) : AutoCloseable
 
     fun keyDown(vk: Int, modifiers: Int): KeyOutcome = Wire.outcome(N.nativeKeyDown(handle, vk, modifiers))
 
-    fun focusGained(isPrivate: Boolean) = N.nativeFocusGained(handle, isPrivate)
+    fun focusGained(isPrivate: Boolean, hostApp: String) = N.nativeFocusGained(handle, isPrivate, hostApp)
 
     fun focusLost() = N.nativeFocusLost(handle)
 

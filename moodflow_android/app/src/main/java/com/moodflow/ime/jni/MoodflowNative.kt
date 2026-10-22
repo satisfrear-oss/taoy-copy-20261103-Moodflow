@@ -40,7 +40,7 @@ object MoodflowNative {
     @JvmStatic external fun nativeCreate(dataDir: String, userRoot: String, fallbackSchema: String, sink: NativeEventSink): Long
     @JvmStatic external fun nativeDestroy(handle: Long)
     @JvmStatic external fun nativeKeyDown(handle: Long, vk: Int, modifiers: Int): Array<String>?
-    @JvmStatic external fun nativeFocusGained(handle: Long, isPrivate: Boolean)
+    @JvmStatic external fun nativeFocusGained(handle: Long, isPrivate: Boolean, hostApp: String)
     @JvmStatic external fun nativeFocusLost(handle: Long)
     @JvmStatic external fun nativeRunCommand(handle: Long, cmd: Int, intArg: Int, strArg: String)
     @JvmStatic external fun nativeUserStoreAvailable(handle: Long): Boolean
