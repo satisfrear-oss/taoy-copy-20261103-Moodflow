@@ -392,7 +392,7 @@ impl Coordinator {
             a.disabled.clear();
         }
         let eval = |text: &str, values: &moodflow_quick_input::QuickValues| {
-            crate::quick_eval::eval_expr(text, values)
+            crate::quick_eval::eval_expr_with_coord(text, values, Some(self))
         };
         let now = chrono::Local::now();
         let (y, m, d) = (now.year(), now.month(), now.day());

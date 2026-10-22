@@ -202,13 +202,12 @@ impl Coordinator {
     /// 含任一 Effect（shell/key/clip 等需异步回调 coordinator 锁）返回 `None`，交异步 spawn 执行。
     ///
     /// **不跑任何 Effect**——纯文本求值只碰 `CmdbarCtx` 读快照（input/last/clip/now/env）与
-    /// 反查表读锁，无副作用，可在持 state 锁的按键线程内安全调用。
+    /// 转换器锁、反查表读锁和拼音引擎快照，无副作用，可在持 state 锁的按键线程内调用。
     /// `$SS` 组 / 求值失败 / services 未装配亦返回 None。
     ///
-    /// ⚠️ 「无锁」已不再成立：`dict.rev` 经 `reverse_render` 取 `self.reverse` 的**读**锁。
-    /// 这与候选构建路径（`build_candidates` 在同一按键线程、同样持 state 锁时取该读锁）
-    /// 是同一个加锁顺序，故不引入新的死锁面；但新增会取其它锁的 `EvalContext` 方法时
-    /// 必须回到这里重新核对顺序。
+    /// ⚠️ 求值会读取 `self.reverse`、OpenCC 转换器和拼音引擎。简繁路径与已有
+    /// `maybe_convert` 一样按 state → converter 加锁；拼音路径与注音渲染共用
+    /// reverse → engine 的顺序。新增 `EvalContext` 能力时仍须回到这里核对锁顺序。
     pub(crate) fn eval_command_text_only(&self, src: &str, input: &str) -> Option<String> {
         let services = self.cmdbar_services.get()?;
         let (front_app, front_title, front_sel) = self.front_ctx_snapshot();
@@ -283,6 +282,15 @@ impl EvalContext for CmdbarCtx<'_> {
     fn reverse_lookup(&self, text: &str, format: &str) -> String {
         self.coord.reverse_render(text, format)
     }
+    fn s2t(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.coord.cmdbar_s2t(text)
+    }
+    fn t2s(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.coord.cmdbar_t2s(text)
+    }
+    fn pinyin(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.coord.cmdbar_pinyin(text)
+    }
     fn sel(&self) -> String {
         self.front_sel.clone()
     }
@@ -310,6 +318,59 @@ impl EvalContext for CmdbarCtx<'_> {
         self.coord
             .plugin_cmd(name, args)
             .map(|r| r.map_err(|e| moodflow_cmdbar::CmdbarError::runtime(name, e.to_string())))
+    }
+}
+
+impl Coordinator {
+    pub(crate) fn cmdbar_s2t(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.s2t
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|converter| converter.convert(text))
+            .ok_or_else(|| moodflow_cmdbar::CmdbarError::runtime("s2t", "OpenCC 数据不可用"))
+    }
+
+    pub(crate) fn cmdbar_t2s(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.t2s
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|converter| converter.convert(text))
+            .ok_or_else(|| moodflow_cmdbar::CmdbarError::runtime("t2s", "OpenCC 数据不可用"))
+    }
+
+    pub(crate) fn cmdbar_pinyin(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        if text.is_empty() {
+            return Ok(String::new());
+        }
+        let reverse = self.reverse.read().unwrap_or_else(|e| e.into_inner());
+        let mut out = String::with_capacity(text.len());
+        let mut han_run = String::new();
+        let flush = |run: &mut String, out: &mut String| {
+            if run.is_empty() {
+                return;
+            }
+            let inferred = self.engine_mgr.word_pinyin_syllables(run);
+            let syllables: Vec<&str> = inferred.split_whitespace().collect();
+            let pinyin = if syllables.is_empty() {
+                reverse.toned_pinyin_of(run, None, " ")
+            } else {
+                reverse.toned_pinyin_of(run, Some(&syllables), " ")
+            };
+            out.push_str(&pinyin);
+            run.clear();
+        };
+        for ch in text.chars() {
+            if reverse.has_pinyin(ch) {
+                han_run.push(ch);
+            } else {
+                flush(&mut han_run, &mut out);
+                out.push(ch);
+            }
+        }
+        flush(&mut han_run, &mut out);
+        Ok(out)
     }
 }
 
@@ -1134,5 +1195,110 @@ mod reap_tests {
             last, None,
             "子进程 {pid} 退出 5 秒后仍挂在本进程名下（状态 {last:?}）"
         );
+    }
+}
+
+#[cfg(test)]
+mod text_conversion_tests {
+    use super::*;
+    use moodflow_config::Config;
+    use moodflow_quick_input::QuickValues;
+    use std::path::{Path, PathBuf};
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "moodflow-cmdbar-transform-{}-{stamp}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(path.join("opencc")).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_octrie(path: &Path, pairs: &[(&str, &str)]) {
+        let mut rows = pairs.to_vec();
+        rows.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        let mut strings = Vec::new();
+        let mut entries = Vec::new();
+        let mut max_key = 0usize;
+        for (key, value) in rows {
+            let key_off = strings.len() as u32;
+            strings.extend_from_slice(key.as_bytes());
+            let value_off = strings.len() as u32;
+            strings.extend_from_slice(value.as_bytes());
+            entries.extend_from_slice(&key_off.to_le_bytes());
+            entries.extend_from_slice(&(key.len() as u16).to_le_bytes());
+            entries.extend_from_slice(&value_off.to_le_bytes());
+            entries.extend_from_slice(&(value.len() as u16).to_le_bytes());
+            max_key = max_key.max(key.len());
+        }
+
+        let mut data = b"WIOC".to_vec();
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&((entries.len() / 12) as u32).to_le_bytes());
+        data.extend_from_slice(&(max_key as u16).to_le_bytes());
+        data.extend_from_slice(&[0; 2]);
+        data.extend_from_slice(&entries);
+        data.extend_from_slice(&strings);
+        std::fs::write(path, data).unwrap();
+    }
+
+    #[test]
+    fn command_and_quick_contexts_use_opencc_and_pinyin_services() {
+        let dir = TestDir::new();
+        write_octrie(&dir.0.join("opencc/STCharacters.octrie"), &[("汉", "漢")]);
+        write_octrie(&dir.0.join("opencc/TSCharacters.octrie"), &[("漢", "汉")]);
+        let pinyin_path = dir.0.join("pinyin_map.txt");
+        std::fs::write(&pinyin_path, "U+4F60: nǐ\nU+597D: hǎo\n").unwrap();
+
+        let coord = Coordinator::new_headless(Config::default(), None);
+        coord.set_eager_prewarm(false);
+        *coord.s2t.lock().unwrap_or_else(|e| e.into_inner()) =
+            moodflow_transform::s2t::Converter::load_variant(&dir.0.join("opencc"), "s2t");
+        *coord.t2s.lock().unwrap_or_else(|e| e.into_inner()) =
+            moodflow_transform::s2t::Converter::load_variant(&dir.0.join("opencc"), "t2s");
+        *coord.reverse.write().unwrap_or_else(|e| e.into_inner()) =
+            moodflow_reverse::ReverseLookup::load(Some(&pinyin_path), None);
+
+        let text = coord
+            .eval_command_text_only(
+                r#"$CC("", type(concat(t2s("漢"), s2t("汉"), pinyin("你好!"))))"#,
+                "",
+            )
+            .expect("纯文本命令应求值");
+        assert_eq!(text, "汉漢nǐ hǎo!");
+
+        let values = QuickValues::Number {
+            subject: "123".into(),
+        };
+        assert_eq!(
+            crate::quick_eval::eval_expr_with_coord(
+                "{concat(t2s('漢'), s2t('汉'), pinyin('你好!'))}",
+                &values,
+                Some(&coord),
+            )
+            .as_deref(),
+            Some("汉漢nǐ hǎo!")
+        );
+    }
+
+    #[test]
+    fn missing_opencc_is_reported_as_conversion_error() {
+        let coord = Coordinator::new_headless(Config::default(), None);
+        assert!(coord.cmdbar_t2s("漢").is_err());
+        assert!(coord.cmdbar_s2t("汉").is_err());
     }
 }

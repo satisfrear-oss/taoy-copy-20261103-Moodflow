@@ -106,8 +106,8 @@ moodflow-quick-input（零 moodflow-* 依赖：解析 + 基础转换 + $ 模板�
   `ExprEval` 回调注入，分发点在 coordinator——它本来就同时依赖两者。
 - `moodflow-cmdbar` **也不依赖 moodflow-quick-input**。quick 函数不做解析，只经
   `EvalContext::quick_var(name)` 取宿主已解析好的量，再做纯字符串加工（补零、
-  换分隔符、替换单位）。`quick_var` 有默认实现（返回 `None`），故加这个方法
-  不惊动任何既有实现者。
+  换分隔符、替换单位）；通用文本函数也经 `EvalContext` 委托宿主转换。新增取值口
+  保留默认实现，不会打断既有上下文实现者。
 
 `$` 模板引擎（`$name` / `${name}` / `$$` 转义）从 `moodflow-phrase` 下沉到
 `moodflow-quick-input::template`，两处共用同一份解析：变量名解析规则若在两个文件里不一致，
@@ -122,8 +122,10 @@ moodflow-quick-input（零 moodflow-* 依赖：解析 + 基础转换 + $ 模板�
 - 不含动作函数——格式表描述的是候选长什么样，不该能改剪贴板、按键或配置。
   `$CC`（带动作）与 `$SS`/`$AA`（多候选）的求值结果一律拒绝。
 
-⚠️ **`s2t()` / `pinyin()` 目前是 stub**（`fn_passthrough`，原样返回）。繁体金额、
-数字读音这类需求要等 cmdbar 补上实现，文档里不要承诺。
+通用文本函数 `t2s()` / `s2t()` / `pinyin()` 由 coordinator 的 `EvalContext` 提供转换能力：
+快捷输入运行时注入同一套 OpenCC 与拼音读音表；拼音结果带声调并保留无法注音的字符，
+不带宿主的纯求值测试上下文保持原文。因此格式表可以组合繁体金额、拼音等输出，例如
+`{s2t(amt())}`。
 
 ### 诊断
 
@@ -167,7 +169,7 @@ cmdbar `quick` 函数族与表达式路径、启动预检、农历（§10）。�
 GUI 在 `moodflow-setting` 仓（词库页第二个全局域）。能调序、启停、单条/整表恢复、导入导出，
 以及新增/编辑/删除**自己的**格式条目（出厂条目的模板不可改，只能停用）。
 
-未做：`s2t`/`pinyin` 依赖 cmdbar 补实现；24 节气（需第二套数据，与农历表同量级）。
+未做：24 节气（需第二套数据，与农历表同量级）。`t2s` / `s2t` / `pinyin` 已通过 cmdbar 的宿主上下文接入。
 
 ## 8. 零回归闸门
 

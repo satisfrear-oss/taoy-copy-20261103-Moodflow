@@ -38,6 +38,18 @@ pub trait EvalContext {
     /// 拿到空串却只表现为「候选出来了但内容是空的」，没有任何报错。给了默认实现，
     /// 这种漏接就再也没有编译期的抓手。
     fn reverse_lookup(&self, text: &str, format: &str) -> String;
+    /// 简体转繁体。无宿主转换能力时保持原文，避免打断不含转换服务的求值上下文。
+    fn s2t(&self, text: &str) -> Result<String> {
+        Ok(text.to_string())
+    }
+    /// 繁体转简体。
+    fn t2s(&self, text: &str) -> Result<String> {
+        Ok(text.to_string())
+    }
+    /// 按宿主拼音表转换文本，通常输出带声调的拼音。
+    fn pinyin(&self, text: &str) -> Result<String> {
+        Ok(text.to_string())
+    }
     /// 当前时间（测试可注入固定时钟）。
     fn now(&self) -> DateTime<Local>;
     /// 副作用服务束；纯求值场景可为 None，动作函数须自行防御。
@@ -150,6 +162,9 @@ pub struct MemoryContext {
     /// 那恰恰是本层唯一负责的事（本层不渲染，只挑字 + 填默认模板 + 转交）。
     #[allow(clippy::type_complexity)]
     pub reverse: Option<Box<dyn Fn(&str, &str) -> String + Send + Sync>>,
+    /// 转换注入：`(函数名, 待转换文本) -> 结果`，供求值测试注入宿主行为。
+    #[allow(clippy::type_complexity)]
+    pub text_transform: Option<Box<dyn Fn(&str, &str) -> Result<String> + Send + Sync>>,
 }
 
 impl MemoryContext {
@@ -208,6 +223,24 @@ impl EvalContext for MemoryContext {
         match &self.reverse {
             Some(f) => f(text, format),
             None => String::new(),
+        }
+    }
+    fn s2t(&self, text: &str) -> Result<String> {
+        match &self.text_transform {
+            Some(f) => f("s2t", text),
+            None => Ok(text.to_string()),
+        }
+    }
+    fn t2s(&self, text: &str) -> Result<String> {
+        match &self.text_transform {
+            Some(f) => f("t2s", text),
+            None => Ok(text.to_string()),
+        }
+    }
+    fn pinyin(&self, text: &str) -> Result<String> {
+        match &self.text_transform {
+            Some(f) => f("pinyin", text),
+            None => Ok(text.to_string()),
         }
     }
     fn now(&self) -> DateTime<Local> {

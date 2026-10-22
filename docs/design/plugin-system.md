@@ -28,7 +28,7 @@
 | 方案包 `.wpkg`、主题包 `.wtheme` | `moodflow-transfer`（`scheme.rs`、`theme.rs`） | 内容包的雏形 |
 | 用户目录覆盖安装目录同名文件 | `Config::resolve_data_file` 等覆盖解析函数 | 内容包的装载机制必须复用它 |
 | 快捷输入（计算/日期/数字）、短语、联想、标点、简繁 | `moodflow-quick-input` / `-phrase` / `-assoc` / `-punct` / `-transform` | 候选来源、文本变换两类扩展点的原型 |
-| 命令直通车（34 个内置函数仍是桩） | `moodflow-cmdbar` | 「命令函数」扩展点 |
+| 命令直通车（74 个内置函数，剩余桩见路线图） | `moodflow-cmdbar` | 「命令函数」扩展点 |
 | 软键盘映射表 | `moodflow-softkeyboard` | 内容包 |
 | Hub 出厂模板与用户覆盖（暖心话、周信、晚间小结等） | `hub_templates/`、ADR 0034/0035 | 内容包（文案类） |
 | 桌宠精灵图（Codex 格式导入） | ADR 0044 | 内容包（形象类） |

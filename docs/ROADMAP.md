@@ -52,10 +52,10 @@
 | 配置 | ✅ | `moodflow-config`：三层合并、字段注册表、补丁、段级降级、写回闸门 | [deferred-config-features.md](deferred-config-features.md) 里的遗留项（§6.6） |
 | 方案（schema 级按键 / 标点 / 候选 / 短语） | ✅ | `moodflow-config/src/schema.rs`；`schema-scoped-behavior.md` 四阶段已实施 | 未真机 |
 | 主题 | 🟡 几乎完成 | `moodflow-theme`；`redesign/theme-migration-plan.md` T1–T6 全部完成；7 套内置主题 | 虚线 / 点线边框绘制；编辑器侧在外部仓 MoodflowThemeEditor |
-| 命令栏（DSL + 内置函数） | 🟡 大部分 | `moodflow-cmdbar`：74 个内置函数 | 5 个仍是桩：`ask`、`pick`（`funcs/action.rs`）、`t2s`、`s2t`、`pinyin`（`funcs/text.rs`，原样返回；`moodflow-transform` 已有真正的转换器可接） |
+| 命令栏（DSL + 内置函数） | 🟡 大部分 | `moodflow-cmdbar`：74 个内置函数；`t2s` / `s2t` 接 OpenCC，`pinyin` 接带调读音表并按词消歧 | 2 个仍是桩：`ask`、`pick`（`funcs/action.rs`） |
 | 设置 RPC | ✅ | `crates/moodflow-rpc`（system / config / compat / keys）+ `moodflow-webdata`（dict / temp / freq / shadow / stats / phrase / theme / schema / backup / scheme），热重载 `config.reload` | `apps/rpc` 是 22 行的废桩，应删除；设置界面在外部仓 `moodflow-setting`，未在本仓核对 |
 | 表现层协议 | ✅ | `moodflow-ui-types` 的 `UiCommand`（62 个变体） | — |
-| 简繁转换 | ✅ | `moodflow-transform/src/s2t.rs`（OpenCC），`[input.s2t]`，`keys.toggle_s2t` | 命令栏的 `s2t()` / `t2s()` 未接 |
+| 简繁转换 | ✅ | `moodflow-transform/src/s2t.rs`（OpenCC），`[input.s2t]`，`keys.toggle_s2t`；命令栏与快捷表达式的 `s2t()` / `t2s()` 共用转换器 | — |
 | IPC / 桥接 | ✅ | `moodflow-ipc`、`moodflow-bridge`（管道、UDS、共享内存、命名事件、SDDL 含 LPAC） | LPAC 真机确认（§6.1） |
 | 按键注入 | ✅ | `moodflow-keys/src/key_inject.rs` | Linux 不走 XTest（设计如此）；macOS 不能设 Caps Lock（系统限制） |
 | 备份 / 导入导出 | ✅ | `moodflow-transfer`：bundle、merge、方案包 `.wpkg`、主题包、Rime 导入；`backup.*`、`dict.*`、`scheme.*`、`theme.*` RPC | `import-export-backup-plan-p4.md` 剩 1 项未勾（待核） |
@@ -110,7 +110,7 @@
 | 4 | 剪贴板历史跨输入法全局可用（待定） | W6 |
 | 5 | Rime 导入、并击方案编辑的界面入口 | W7、W8 |
 | 6 | 安装器按数据清单校验；用户词库恢复文档与只读导出 | W9、W10 |
-| 7 | 命令栏 5 个桩函数（`ask`、`pick`、`t2s`、`s2t`、`pinyin`） | §4 命令栏一行 |
+| 7 | 命令栏 2 个桩函数（`ask`、`pick`） | §4 命令栏一行 |
 | 8 | 主题虚线 / 点线边框 | `redesign/theme-toml-migration-plan.md` §2 |
 | 9 | `set_shuangpin_layout` 从旧配置重置当前方案 | `design/per-app-overrides.md` |
 | 10 | 删除废桩 `apps/rpc` | §4 设置 RPC 一行 |
