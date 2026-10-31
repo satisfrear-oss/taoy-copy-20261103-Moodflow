@@ -612,7 +612,7 @@ pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeClearCompo
     string_array(&mut env, &enc.unwrap_or_else(|| vec![String::new()]))
 }
 
-// ── 九宫格（无状态）─────────────────────────────────────────
+// ── 九宫格：切分排序要核心句柄（问引擎首选），选拼音与钉住是纯函数 ──
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeT9Segmentations(

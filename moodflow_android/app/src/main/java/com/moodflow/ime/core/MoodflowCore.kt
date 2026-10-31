@@ -110,7 +110,7 @@ class MoodflowCore private constructor(private var handle: Long) : AutoCloseable
     }
 }
 
-/** 九宫格切分（无状态）。 */
+/** 九宫格：切分排序走核心（要引擎给每种切分的首选打分，只读不改组字）；选拼音行与钉住是纯函数。 */
 object T9Native {
     fun segmentations(core: MoodflowCore, input: String, limit: Int): List<String> =
         if (input.isEmpty()) emptyList() else core.t9Segmentations(input, limit)

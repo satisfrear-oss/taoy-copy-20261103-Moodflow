@@ -64,7 +64,7 @@ object MoodflowNative {
     @JvmStatic external fun nativeReplaceComposition(handle: Long, text: String): Array<String>?
     @JvmStatic external fun nativeClearComposition(handle: Long): Array<String>?
 
-    // ── 九宫格（无状态）──
+    // ── 九宫格：切分排序要核心句柄（逐个切分问引擎首选候选）；选拼音、钉住是纯函数 ──
     @JvmStatic external fun nativeT9Segmentations(handle: Long, input: String, limit: Int): Array<String>?
     @JvmStatic external fun nativeT9Leading(input: String, position: Int): Array<String>?
     @JvmStatic external fun nativeT9Pin(input: String, position: Int, syllable: String): String?
