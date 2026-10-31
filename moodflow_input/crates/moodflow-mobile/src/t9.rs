@@ -226,6 +226,14 @@ mod tests {
         });
         assert_eq!(ranked.len(), 4, "{ranked:?}");
         assert_eq!(ranked.first().map(String::as_str), Some("ni'hao"));
+
+        // 末段刚起头（`9`）：半截音节不展开，`ni'hao'w` 才进得了打分窗口
+        let window = segmentations("644269", 8);
+        assert!(!window.iter().any(|s| s == "ni'hao'w"), "{window:?}");
+        let ranked = ranked_segmentations("644269", 8, |spelling| {
+            Some((if spelling == "ni'hao'w" { 100 } else { 0 }, 0, 0))
+        });
+        assert_eq!(ranked.first().map(String::as_str), Some("ni'hao'w"));
     }
 
     #[test]
