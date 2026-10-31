@@ -767,7 +767,7 @@ pub fn expand_dict_value(
     }
 }
 
-/// 短语 display 求值所需的**宿主能力回调束**（剪贴板、反查）。
+/// 短语 display 求值所需的**宿主能力回调束**（剪贴板、反查、文本转换）。
 ///
 /// # 为什么是结构体而不是继续加形参
 ///
@@ -787,16 +787,25 @@ pub struct PhraseHost<'a> {
     /// 反查渲染：`(待查文本, format 模板) -> 渲染结果`；查不到返回空串。
     /// 供 `dict.rev(...)` 使用。模板语法与候选注释段一致，渲染在宿主侧完成。
     pub reverse: &'a dyn Fn(&str, &str) -> String,
+    /// 文本转换：`(函数名, 文本) -> 结果`，函数名是 `s2t` / `t2s` / `pinyin`。
+    /// 供短语模板里的 `{s2t(...)}` 等使用，与命令栏共用宿主的 OpenCC 与拼音读音表；
+    /// 宿主转换数据不可用时返回错误，这条候选不出现（不显示没转换的原文）。
+    pub transform: &'a dyn Fn(&str, &str) -> moodflow_cmdbar::Result<String>,
 }
 
+/// 不做任何转换的 [`PhraseHost::transform`]：原样返回。供测试与无转换数据的 headless 路径。
+pub const IDENTITY_TRANSFORM: &dyn Fn(&str, &str) -> moodflow_cmdbar::Result<String> =
+    &|_, text| Ok(text.to_string());
+
 impl PhraseHost<'static> {
-    /// 全空宿主：剪贴板与反查都返回空串。供测试与无平台能力的 headless 路径。
+    /// 全空宿主：剪贴板与反查都返回空串，文本转换原样返回。供测试与无平台能力的 headless 路径。
     pub fn empty() -> Self {
         const CLIP: &dyn Fn(i64) -> String = &|_| String::new();
         const REVERSE: &dyn Fn(&str, &str) -> String = &|_, _| String::new();
         PhraseHost {
             clip: CLIP,
             reverse: REVERSE,
+            transform: IDENTITY_TRANSFORM,
         }
     }
 }
@@ -825,6 +834,15 @@ impl moodflow_cmdbar::EvalContext for PhraseCtx<'_> {
     }
     fn reverse_lookup(&self, text: &str, format: &str) -> String {
         (self.host.reverse)(text, format)
+    }
+    fn s2t(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        (self.host.transform)("s2t", text)
+    }
+    fn t2s(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        (self.host.transform)("t2s", text)
+    }
+    fn pinyin(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        (self.host.transform)("pinyin", text)
     }
     fn sel(&self) -> String {
         String::new()
@@ -1096,6 +1114,48 @@ mod tests {
         PhraseHost::empty()
     }
 
+    /// 短语模板里的 `s2t` / `t2s` / `pinyin` 交给宿主转换；宿主报错时整条候选不出现，
+    /// 而不是显示没转换的原文（那会让人以为转换生效了）。
+    #[test]
+    fn text_transforms_use_host_and_drop_on_error() {
+        let layer = PhraseLayer::from_records(vec![PhraseSeed {
+            code: "zfan".into(),
+            text: "{s2t('汉字')}".into(),
+            weight: 2000,
+            position: 0,
+            is_system: false,
+            category: String::new(),
+        }]);
+        let clip = |_n: i64| String::new();
+        let reverse = |_: &str, _: &str| String::new();
+        let transform = |name: &str, text: &str| -> moodflow_cmdbar::Result<String> {
+            assert_eq!(name, "s2t");
+            Ok(text.replace('汉', "漢"))
+        };
+        let host = PhraseHost {
+            clip: &clip,
+            reverse: &reverse,
+            transform: &transform,
+        };
+        let hits = layer.lookup_at("zfan", fixed(), &[], &host, &PhraseScope::ALL);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "漢字");
+
+        let failing = |name: &str, _: &str| -> moodflow_cmdbar::Result<String> {
+            Err(moodflow_cmdbar::CmdbarError::runtime(
+                name,
+                "OpenCC 数据不可用",
+            ))
+        };
+        let host = PhraseHost {
+            clip: &clip,
+            reverse: &reverse,
+            transform: &failing,
+        };
+        let hits = layer.lookup_at("zfan", fixed(), &[], &host, &PhraseScope::ALL);
+        assert!(hits.is_empty(), "转换不可用时不出候选：{hits:?}");
+    }
+
     /// ★ 剪贴板反查（出厂 `cofc`）的端到端形状。
     ///
     /// 锁两件事：**纯模板短语的 display 就是上屏文本**（无 `command_src`，不需要
@@ -1122,6 +1182,7 @@ mod tests {
         let host = PhraseHost {
             clip: &clip,
             reverse: &reverse,
+            transform: IDENTITY_TRANSFORM,
         };
         let hits = layer.lookup_at("cofc", fixed(), &[], &host, &PhraseScope::ALL);
         assert_eq!(hits.len(), 1);
@@ -1136,6 +1197,7 @@ mod tests {
         let host = PhraseHost {
             clip: &empty_clip,
             reverse: &reverse,
+            transform: IDENTITY_TRANSFORM,
         };
         assert!(
             layer
@@ -1164,6 +1226,7 @@ mod tests {
         let host = PhraseHost {
             clip: &clip,
             reverse: &reverse,
+            transform: IDENTITY_TRANSFORM,
         };
         let texts: Vec<String> = layer
             .lookup_at("cofc", fixed(), &[], &host, &PhraseScope::ALL)
@@ -1419,6 +1482,7 @@ mod tests {
         let host = PhraseHost {
             clip: &clip,
             reverse: &ok,
+            transform: IDENTITY_TRANSFORM,
         };
         assert_eq!(
             expand_dict_value("{dict.rev(clip())}", "fc", fixed(), &[], &host),
@@ -1435,6 +1499,7 @@ mod tests {
         let host = PhraseHost {
             clip: &clip,
             reverse: &miss,
+            transform: IDENTITY_TRANSFORM,
         };
         assert_eq!(
             expand_dict_value("{dict.rev(clip())}", "fc", fixed(), &[], &host),

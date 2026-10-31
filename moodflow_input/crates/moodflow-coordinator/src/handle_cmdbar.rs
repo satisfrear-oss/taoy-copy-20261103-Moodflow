@@ -340,6 +340,23 @@ impl Coordinator {
             .ok_or_else(|| moodflow_cmdbar::CmdbarError::runtime("t2s", "OpenCC 数据不可用"))
     }
 
+    /// 按函数名分发到上面三个转换，供短语模板的 [`moodflow_phrase::PhraseHost::transform`] 用。
+    pub(crate) fn cmdbar_transform(
+        &self,
+        name: &str,
+        text: &str,
+    ) -> moodflow_cmdbar::Result<String> {
+        match name {
+            "s2t" => self.cmdbar_s2t(text),
+            "t2s" => self.cmdbar_t2s(text),
+            "pinyin" => self.cmdbar_pinyin(text),
+            other => Err(moodflow_cmdbar::CmdbarError::runtime(
+                other,
+                "未知的文本转换",
+            )),
+        }
+    }
+
     pub(crate) fn cmdbar_pinyin(&self, text: &str) -> moodflow_cmdbar::Result<String> {
         if text.is_empty() {
             return Ok(String::new());

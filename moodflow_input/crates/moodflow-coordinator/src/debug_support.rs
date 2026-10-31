@@ -237,6 +237,7 @@ impl Coordinator {
         let host = moodflow_phrase::PhraseHost {
             clip: &clip,
             reverse: &reverse,
+            transform: &|name: &str, text: &str| self.cmdbar_transform(name, text),
         };
         self.phrases
             .read()

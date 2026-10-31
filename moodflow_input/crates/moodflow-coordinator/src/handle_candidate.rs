@@ -1115,6 +1115,7 @@ impl Coordinator {
         let host = moodflow_phrase::PhraseHost {
             clip: &clip,
             reverse: &reverse,
+            transform: &|name: &str, text: &str| self.cmdbar_transform(name, text),
         };
         let mut expanded: Vec<Candidate> = Vec::with_capacity(raw.len());
         for cand in raw.into_iter() {
@@ -1304,6 +1305,7 @@ impl Coordinator {
             let host = moodflow_phrase::PhraseHost {
                 clip: &clip,
                 reverse: &reverse,
+                transform: &|name: &str, text: &str| self.cmdbar_transform(name, text),
             };
             for hit in phrases.lookup(&state.input_buffer, &recent, &host, &phrase_scope) {
                 let is_command = hit.command_src.is_some();
