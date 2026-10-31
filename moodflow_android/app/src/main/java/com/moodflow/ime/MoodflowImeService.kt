@@ -210,10 +210,18 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
         storeAvailable = c.userStoreAvailable()
         refreshSchemas()
         readCoreConfig()
-        if (tracker.current != null) c.focusGained(policy.isPrivate, currentInputEditorInfo?.packageName.orEmpty())
+        if (tracker.current != null) c.focusGained(policy.isPrivate, hostPackage(currentInputEditorInfo?.packageName))
         if (KeyboardChoice.isChord(layoutPref) || layoutPref == KeyboardChoice.NINE_KEY) ensurePinyinSchema()
         render()
     }
+
+    /**
+     * 上报给核心的宿主包名。焦点在本应用（设置应用里的打字练习）时统一报 `com.moodflow.ime`：
+     * 核心按这个名字排除每日统计（`moodflow-tap` 的 `BUILTIN_EXCLUDED`），而本应用的实际包名
+     * 将来可能带 `.debug` 后缀或换渠道，直接透传就会漏掉排除。
+     */
+    private fun hostPackage(pkg: String?): String =
+        if (pkg != null && pkg == packageName) "com.moodflow.ime" else pkg.orEmpty()
 
     override fun onDestroy() {
         destroyed = true
@@ -275,7 +283,7 @@ class MoodflowImeService : InputMethodService(), NativeEventSink {
         if (!policy.allowBuffer || change == FieldChange.NEW_FIELD) bufferMode = false
         if (change == FieldChange.NEW_FIELD) closePanels()
 
-        core?.focusGained(policy.isPrivate, attribute.packageName.orEmpty())
+        core?.focusGained(policy.isPrivate, hostPackage(attribute.packageName))
         restoreSettings()
         uppercase = false
         numeric = policy.prefersNumberPad

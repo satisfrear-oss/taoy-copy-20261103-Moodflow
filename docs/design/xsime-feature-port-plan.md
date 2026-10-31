@@ -456,7 +456,7 @@ JNI 契约测试。AGP 构建与 APK 由 CI 验证；手势、连删、上滑、
 
 - 九宫格「选拼音」只能钉住开头的音节（`t9::pin_leading`），后续音节的拼法选择要门面支持按位置钉住。
 - ~~打字测速输入计入日常统计~~ **已补（A2，2026-10-22）**：Android 焦点事件携带应用包名，
-  `com.moodflow.ime` 加入 `BUILTIN_EXCLUDED`，日常统计与 Moodflow 感知均排除此应用。
+  `com.moodflow.ime` 加入 `BUILTIN_EXCLUDED`，日常统计排除此应用（Android 上没有 Hub 与感知，这条名单在 Windows 上同样挡住感知）；应用侧把自身包名统一报成 `com.moodflow.ime`，带 `.debug` 后缀或换渠道也不会漏。测试见 `moodflow-coordinator/tests/practice_stats_exclusion.rs`。
 - 插件安装：Android 没有插件市场入口，只能列出与启停已装插件。
 - 无痕字段（`IME_FLAG_NO_PERSONALIZED_LEARNING`）仍只能直接上屏英文：核心没有「本字段不学习但允许中文」的开关。
 - 触屏并击只支持一次手势结算，XSIME 的「两段手势组合成一个音节」未做；并击方案的导入与编辑界面未移植。

@@ -318,7 +318,8 @@ fn coordinator_events_reach_hub() {
         _ => unreachable!(),
     }
 
-    // Android Hub 以包名上报焦点（client token 没有 PID）：同一内置名单必须排除感知和日常统计。
+    // Moodflow 自身的 Android 应用以包名上报焦点（client token 没有 PID）：同一内置名单必须挡住感知；
+    // 日常统计一侧见 tests/practice_stats_exclusion.rs。
     coord.handle_focus_gained(&focus(0, "COM.MOODFLOW.IME", 0));
     match hub.until(|u| matches!(u, Up::Focus { .. })).0 {
         Up::Focus { app, blocked, .. } => {
