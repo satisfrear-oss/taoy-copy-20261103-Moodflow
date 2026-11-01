@@ -4117,10 +4117,12 @@ impl Coordinator {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let loaded = Self::load_emoji_dict(&tables);
-        let ok = !loaded.is_empty();
+        // 部分成功照样挂上（能用的表先用起来），但**只有全部表都到位才记 spec**：缺了
+        // `emoji_word.txt` 时若因符号表加载成功就记下，之后补跑 `gen-data` 要等重启才生效
+        // ——正是上面「失败不记录」要避免的。代价只是下次 sync 再开一遍已缓存的表（mmap 复用）。
+        let (loaded, complete) = Self::load_emoji_dict(&tables);
         *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = loaded;
-        if ok {
+        if complete {
             *self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner()) = Some(spec);
         }
     }
@@ -4137,9 +4139,10 @@ impl Coordinator {
             };
             for entry in entries {
                 for symbol in entry.hidden {
-                    let normalized: String =
-                        symbol.chars().filter(|&ch| ch != '\u{fe0f}').collect();
-                    hidden.insert(format!("{}\0{}", entry.word, normalized));
+                    hidden.insert(crate::handle_candidate::emoji_hidden_key(
+                        &entry.word,
+                        &symbol,
+                    ));
                 }
             }
         }
@@ -4148,14 +4151,17 @@ impl Coordinator {
 
     /// 实际加载 emoji 表：解析路径 → 繁简归一 → 建/复用 `.wemj` 缓存 → mmap。
     ///
-    /// 失败一律返回 `None`（＝功能不可用），**不降级成内存表**——理由见
+    /// 返回 `(加载成功的表, 是否每张启用的表都到位)`。后者是 `sync_emoji_dict` 记 spec 的
+    /// 判据：部分成功也要如实报「不完整」，否则缺的那张补齐后要等重启才生效。
+    ///
+    /// 失败的表一律跳过（＝该表不可用），**不降级成内存表**——理由见
     /// [`moodflow_dict::emojidict::load_or_build`]：本功能是纯锦上添花的可选项，而「常驻内存
     /// 随功能数量累积」正是它要避开的东西。
-    fn load_emoji_dict(tables: &[(String, String)]) -> Vec<EmojiTableReader> {
+    fn load_emoji_dict(tables: &[(String, String)]) -> (Vec<EmojiTableReader>, bool) {
         let data_dir = Config::data_dir();
         let dd = data_dir.as_deref();
         if tables.is_empty() {
-            return Vec::new();
+            return (Vec::new(), true);
         }
 
         // ★ 繁→简归一表是**必需**的，缺了不能降级成「不归一照样加载」。
@@ -4167,30 +4173,32 @@ impl Coordinator {
             warn!(
                 "emoji 繁简归一表缺失（opencc/TSCharactersDerived.octrie），扩展不可用；运行 gen-data 重建"
             );
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let norm_bytes = std::fs::read(&norm_path)
             .map_err(|e| warn!("读 emoji 归一表失败 {}: {}", norm_path.display(), e))
             .ok();
         let Some(norm_bytes) = norm_bytes else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let norm = moodflow_transform::s2t::Dict::parse(&norm_bytes).or_else(|| {
             warn!("emoji 归一表格式无效: {}", norm_path.display());
             None
         });
         let Some(norm) = norm else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
 
         let Some(cache_dir) = Config::cache_dir() else {
             warn!("无缓存目录，emoji 扩展不可用");
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let mut readers = Vec::new();
+        let mut complete = true;
         for (id, rel) in tables {
             let Some(source) = Config::resolve_data_file(dd, rel) else {
                 warn!("emoji 表文件缺失: {rel}");
+                complete = false;
                 continue;
             };
             let mut meta = EmojiTableMeta::default_for(id);
@@ -4213,6 +4221,7 @@ impl Coordinator {
                 &cache_file,
                 |s| norm.convert_once(s),
             ) else {
+                complete = false;
                 continue;
             };
             readers.push(EmojiTableReader {
@@ -4222,7 +4231,7 @@ impl Coordinator {
                 reader,
             });
         }
-        readers
+        (readers, complete)
     }
 
     /// 辅助码来源缓存失效：方案切换后置 `None`，下次进入辅助码时按新方案的

@@ -61,6 +61,9 @@ impl QuickFormatOp {
             // 这里返回 None 是第二道闸——返回类型逼着「新加一个 op」时必须来这儿表态，
             // 而不是默默落进某个语义不搭的分支。
             C::ToggleCommon => None,
+            // 恢复隐藏符号落在宿主词的 emoji 覆盖表上，与格式无关：调用方在进这里之前
+            // 就把它转给 `candidate_op`（见 `candidate_or_quick_format_op`）。
+            C::RestoreHiddenSymbols => None,
         }
     }
 }
@@ -220,7 +223,11 @@ impl Coordinator {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             self.quick_format_scope(&state, page_local)
         };
-        let Some(scope) = scope else {
+        // 格式候选同样可以是符号建议的宿主（算式结果、日期都能查 emoji 表）；恢复隐藏
+        // 作用于宿主词而不是格式，不论是不是格式候选都交给 `candidate_op`。
+        let Some(scope) =
+            scope.filter(|_| op != moodflow_ui_types::CandidateOp::RestoreHiddenSymbols)
+        else {
             return self.candidate_op(op, page_local);
         };
         // 对格式候选无语义的动作（常用/生僻标记）原样忽略：菜单侧的 quick 分支本就不给，
