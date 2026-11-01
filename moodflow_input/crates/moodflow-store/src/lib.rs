@@ -10,6 +10,7 @@ pub mod common_chars;
 pub mod completion;
 pub mod dict_export;
 pub mod draft_words;
+pub mod emoji_user;
 pub mod freq;
 pub mod import_formats;
 pub mod migration;

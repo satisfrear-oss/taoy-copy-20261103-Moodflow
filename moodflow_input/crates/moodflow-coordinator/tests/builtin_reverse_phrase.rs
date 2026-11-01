@@ -42,6 +42,7 @@ fn factory_cofc_parses_and_renders_clipboard_lookup() {
     let host = moodflow_phrase::PhraseHost {
         clip: &clip,
         reverse: &reverse,
+        transform: moodflow_phrase::IDENTITY_TRANSFORM,
     };
 
     let hits = layer().lookup("cofc", &[], &host, &moodflow_phrase::PhraseScope::ALL);
@@ -96,6 +97,7 @@ fn factory_cofc_hints_when_empty_and_never_commits_the_hint() {
         let host = moodflow_phrase::PhraseHost {
             clip: &clip,
             reverse: &reverse,
+            transform: moodflow_phrase::IDENTITY_TRANSFORM,
         };
         let hits = layer().lookup("cofc", &[], &host, &moodflow_phrase::PhraseScope::ALL);
         assert_eq!(hits.len(), 1, "{name}：应出一条提示候选，而不是什么都没有");

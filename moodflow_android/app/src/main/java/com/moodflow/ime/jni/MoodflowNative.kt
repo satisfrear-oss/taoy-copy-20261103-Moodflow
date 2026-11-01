@@ -40,7 +40,7 @@ object MoodflowNative {
     @JvmStatic external fun nativeCreate(dataDir: String, userRoot: String, fallbackSchema: String, sink: NativeEventSink): Long
     @JvmStatic external fun nativeDestroy(handle: Long)
     @JvmStatic external fun nativeKeyDown(handle: Long, vk: Int, modifiers: Int): Array<String>?
-    @JvmStatic external fun nativeFocusGained(handle: Long, isPrivate: Boolean)
+    @JvmStatic external fun nativeFocusGained(handle: Long, isPrivate: Boolean, hostApp: String)
     @JvmStatic external fun nativeFocusLost(handle: Long)
     @JvmStatic external fun nativeRunCommand(handle: Long, cmd: Int, intArg: Int, strArg: String)
     @JvmStatic external fun nativeUserStoreAvailable(handle: Long): Boolean
@@ -64,10 +64,10 @@ object MoodflowNative {
     @JvmStatic external fun nativeReplaceComposition(handle: Long, text: String): Array<String>?
     @JvmStatic external fun nativeClearComposition(handle: Long): Array<String>?
 
-    // ── 九宫格（无状态）──
-    @JvmStatic external fun nativeT9Segmentations(input: String, limit: Int): Array<String>?
-    @JvmStatic external fun nativeT9Leading(input: String): Array<String>?
-    @JvmStatic external fun nativeT9Pin(input: String, syllable: String): String?
+    // ── 九宫格：切分排序要核心句柄（逐个切分问引擎首选候选）；选拼音、钉住是纯函数 ──
+    @JvmStatic external fun nativeT9Segmentations(handle: Long, input: String, limit: Int): Array<String>?
+    @JvmStatic external fun nativeT9Leading(input: String, position: Int): Array<String>?
+    @JvmStatic external fun nativeT9Pin(input: String, position: Int, syllable: String): String?
 
     // ── Buffer ──
     @JvmStatic external fun nativeBufferNew(capacity: Int): Long

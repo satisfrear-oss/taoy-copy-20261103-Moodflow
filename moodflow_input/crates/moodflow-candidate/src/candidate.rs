@@ -202,6 +202,9 @@ pub struct Candidate {
     /// 都是同类前科。
     #[serde(default)]
     pub is_emoji_suggestion: bool,
+    /// Emoji 建议对应的宿主词，供「不再显示此符号」按词写入用户覆盖表。
+    #[serde(skip)]
+    pub emoji_host: String,
     pub is_phrase: bool,
     pub is_command: bool,
     /// 是否来自模糊音变体命中（非原拼音精确匹配）。
@@ -581,6 +584,7 @@ impl Default for Candidate {
             user_rare: false,
             is_scope_filtered: false,
             is_emoji_suggestion: false,
+            emoji_host: String::new(),
             is_phrase: false,
             is_command: false,
             is_fuzzy: false,

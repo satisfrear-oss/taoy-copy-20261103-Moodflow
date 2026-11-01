@@ -15,6 +15,19 @@ class T9Input {
 
     val isEmpty: Boolean get() = text.isEmpty()
 
+    /**
+     * 「选拼音」行针对的音节段（按 `'` 分段，从 0 起）：第一段还含数字、即还没钉住的段。
+     *
+     * 不能直接取最后一段：用「1」键收尾的段（`64'`）也还没钉住，接着打 `426` 后仍要能回头给
+     * `64` 选 ni / mi。全部钉完时指向最后一段（空段或已钉的音节），选拼音行为空。
+     */
+    val activeSegmentIndex: Int
+        get() {
+            val parts = text.split('\'')
+            val unpinned = parts.indexOfFirst { part -> part.any { it in '2'..'9' } }
+            return if (unpinned >= 0) unpinned else parts.lastIndex
+        }
+
     /** 按数字键。非 `2`–`9` 忽略并返回 `false`。 */
     fun pressDigit(d: Char): Boolean {
         if (d !in '2'..'9') return false
@@ -35,8 +48,14 @@ class T9Input {
         return true
     }
 
-    /** 交给切分的串：末尾的分隔符只是「本音节已结束」，不参与切分。 */
-    val query: String get() = text.trimEnd('\'')
+    /**
+     * 交给切分的串：就是 [text]，**保留**末尾的分隔符。
+     *
+     * 末尾的 `'` 表示「这一段已打完」（钉住音节之后、或按了「1」键）。去掉它，切分会把末段当成
+     * 还在打的音节按前缀展开（`64'` 只该切 mi / ni，去掉后还会冒出 nian、ming…），按候选质量
+     * 排序时就可能挑中用户没打的拼法。
+     */
+    val query: String get() = text
 
     /** 采用 Rust 侧钉住音节后的新串（`nativeT9Pin` 的返回值）。 */
     fun replaceWith(pinned: String) {

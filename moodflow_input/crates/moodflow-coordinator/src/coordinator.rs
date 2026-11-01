@@ -1280,6 +1280,8 @@ pub(crate) struct SchemaToggleOrigin {
 }
 
 /// 中央协调器
+type EmojiLoadSpec = (bool, Vec<(String, String)>);
+
 pub struct Coordinator {
     pub(crate) state: Mutex<State>,
     pub(crate) push_server: Arc<PushServer>,
@@ -1389,13 +1391,14 @@ pub struct Coordinator {
     /// ★ 功能关闭时恒为 `None` 且**数据文件根本不打开**——未启用的用户为本功能付出的
     /// 常驻内存与启动开销都是零。这是 `.wemj` 走 mmap 的同一条理由的延伸：本表按需读页，
     /// 常驻内存与库大小基本无关，但「不加载」比「加载得很省」还要省。
-    pub(crate) emoji_dict:
-        std::sync::RwLock<Option<std::sync::Arc<moodflow_dict::emojidict::EmojiReader>>>,
-    /// 上次生效的 emoji 加载参数 `(enabled, categories)`，`sync_emoji_dict` 的去重依据。
+    pub(crate) emoji_dict: std::sync::RwLock<Vec<EmojiTableReader>>,
+    /// 按「宿主词 + NUL + FE0F 归一后的符号」索引的隐藏覆盖，避免在候选热路径扫 redb。
+    pub(crate) emoji_hidden: std::sync::RwLock<std::collections::HashSet<String>>,
+    /// 上次生效的 emoji 加载配置，`sync_emoji_dict` 的去重依据。
     ///
     /// 只记**影响加载结果**的两项：`show_as` / `max_per_word` 这些是查询期参数，改了不必
     /// 重建 mmap。判据写宽了会让每次 reload 都重解析一遍 4600 行词表。
-    pub(crate) emoji_spec: Mutex<Option<(bool, bool)>>,
+    pub(crate) emoji_spec: Mutex<Option<EmojiLoadSpec>>,
     /// 「辅助码触发键被音节分隔符占用」的告警是否已发过（每方案一次，随
     /// `invalidate_aux_code_table` 复位）。见 `handle_aux_code::warn_aux_code_key_taken`。
     pub(crate) aux_code_key_warned: std::sync::atomic::AtomicBool,
@@ -2021,6 +2024,49 @@ pub struct Coordinator {
     pub(crate) chord: crate::handle_chord::ChordState,
     /// 候选矩阵（`handle_matrix`）。
     pub(crate) matrix: crate::handle_matrix::MatrixState,
+}
+
+pub(crate) struct EmojiTableReader {
+    pub(crate) max_per_word: usize,
+    pub(crate) max_hosts: usize,
+    pub(crate) min_chars: usize,
+    pub(crate) reader: std::sync::Arc<moodflow_dict::emojidict::EmojiReader>,
+}
+
+#[derive(serde::Deserialize)]
+struct EmojiTableFile {
+    #[serde(default)]
+    meta: Option<EmojiTableMeta>,
+}
+
+#[derive(serde::Deserialize)]
+struct EmojiTableMeta {
+    #[serde(default = "emoji_symbols_max_per_word")]
+    max_per_word: usize,
+    #[serde(default = "emoji_default_max_hosts")]
+    max_hosts: usize,
+    #[serde(default = "emoji_default_min_chars")]
+    min_chars: usize,
+}
+
+impl EmojiTableMeta {
+    fn default_for(id: &str) -> Self {
+        Self {
+            max_per_word: if id == "symbols" { 5 } else { 3 },
+            max_hosts: if id == "symbols" { 3 } else { 1 },
+            min_chars: 2,
+        }
+    }
+}
+
+fn emoji_symbols_max_per_word() -> usize {
+    5
+}
+fn emoji_default_max_hosts() -> usize {
+    1
+}
+fn emoji_default_min_chars() -> usize {
+    2
 }
 
 /// 拆字资产当前生效状态：库的解析后绝对路径 + 已下发的字根字体（路径, DWrite 家族名）。
@@ -2681,7 +2727,8 @@ impl Coordinator {
             aux_code_runtime: std::sync::RwLock::new(None),
             // 空初值 + 下面 new() 里的 sync_emoji_dict 首次加载：与注释库/拆字字体同一套
             // 「声明式变更」写法，启动与后续 reload 走**同一条**代码路径。
-            emoji_dict: std::sync::RwLock::new(None),
+            emoji_dict: std::sync::RwLock::new(Vec::new()),
+            emoji_hidden: std::sync::RwLock::new(std::collections::HashSet::new()),
             emoji_spec: Mutex::new(None),
             aux_code_key_warned: std::sync::atomic::AtomicBool::new(false),
             quick_formats,
@@ -3207,13 +3254,26 @@ impl Coordinator {
     /// 快照，并按 `password_force_english_for_pid`（per-app 规则优先，否则全局开关）决定是否
     /// 强制英文抑制（密码框场景）。
     pub(crate) fn apply_input_diag(&self, pid: u32, disabled: bool, reason_byte: u8, mask: u64) {
+        self.apply_input_diag_for_app(pid, disabled, reason_byte, mask, None);
+    }
+
+    pub(crate) fn apply_input_diag_for_app(
+        &self,
+        pid: u32,
+        disabled: bool,
+        reason_byte: u8,
+        mask: u64,
+        app_override: Option<&str>,
+    ) {
         use std::sync::atomic::Ordering::Relaxed;
         // 展示原因 = mask/disabled 推导，再叠加 DLL 上报的 reason_byte 里「context 级禁用」这一档：
         // DLL 把 context 级 KEYBOARD_DISABLED 折进了 mask 的 IS_PASSWORD 位，折位前的区分只有
         // 它知道（见 `reason_from_report`）。reason 只管展示与提示语，**不参与**下面的抑制决策
         // ——抑制仍只看 mask，两种来源行为一致，避免「双重来源」歧义。
         let reason = crate::input_diag::reason_from_report(disabled, reason_byte, mask);
-        let name = if pid != 0 {
+        let name = if let Some(app) = app_override.filter(|app| !app.is_empty()) {
+            app.to_lowercase()
+        } else if pid != 0 {
             self.cached_proc_name((pid as u64) << 32)
         } else {
             String::new()
@@ -4002,10 +4062,18 @@ impl Coordinator {
     /// 失败不记录 ⇒ 下次 sync 会重试，于是用户补跑 `gen-data` 后不必改配置就能生效；
     /// 重试成本只是解析一次路径后发现文件不在，可以忽略。
     pub(crate) fn sync_emoji_dict(&self) {
-        let (enabled, categories) = {
+        self.refresh_emoji_hidden();
+        let (enabled, tables) = {
             let rt = self.rt();
             let e = &rt.config.input.emoji;
-            (e.enabled, e.categories)
+            (
+                e.enabled,
+                e.tables
+                    .iter()
+                    .filter(|t| t.enabled)
+                    .map(|t| (t.id.clone(), t.path.clone()))
+                    .collect::<Vec<_>>(),
+            )
         };
         // 值域校验放在去重之前：`scope`/`show_as` 不影响加载、不进变更判据，但配置变更
         // 时正是唯一该告警的时机。放进热路径的话每次按键都会刷一条。
@@ -4027,60 +4095,73 @@ impl Coordinator {
                 );
             }
         }
-        let spec = (enabled, categories);
+        let spec = (enabled, tables.clone());
         {
             let cur = self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner());
-            if *cur == Some(spec) {
+            if cur.as_ref() == Some(&spec) {
                 return;
             }
         }
         // 关闭：连数据文件都不打开。未启用的用户为本功能付出的开销就此归零。
         if !enabled {
-            *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = None;
+            self.emoji_dict
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
             *self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner()) = Some(spec);
             info!("emoji 扩展已关闭");
             return;
         }
-        // ★ 先放掉旧表，再重建。`categories` 翻转会改变指纹源 ⇒ `load_or_build` 要写新的
-        // `.wemj` 并 rename 覆盖旧文件，而旧表此刻还被本字段的 Arc 持着 mmap——Windows 上
-        // 覆盖被映射的文件返回拒绝访问（本机以 mmap + `os.replace` 探针实测 WinError 5，
-        // `emojidict.rs` 的测试也为此显式 `drop(r)`）。不先放掉，表现为「打开分类词后
-        // emoji 整个消失，随便再改一项配置又回来」——spec 未记录使下次 sync 重试成功，
-        // 恰好把这个缺陷藏成了偶发。
-        //
-        // 池里只存 Weak（`reader_pool` 模块文档），本字段是唯一的强引用；写锁会等正在
-        // `apply_emoji_suggestions` 里的读者退出，之后旧映射即释放。
-        *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = None;
-        let loaded = Self::load_emoji_dict(categories);
-        let ok = loaded.is_some();
+        // Release this coordinator's mmap handles before any cache path can be rebuilt on Windows.
+        self.emoji_dict
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        // 部分成功照样挂上（能用的表先用起来），但**只有全部表都到位才记 spec**：缺了
+        // `emoji_word.txt` 时若因符号表加载成功就记下，之后补跑 `gen-data` 要等重启才生效
+        // ——正是上面「失败不记录」要避免的。代价只是下次 sync 再开一遍已缓存的表（mmap 复用）。
+        let (loaded, complete) = Self::load_emoji_dict(&tables);
         *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = loaded;
-        if ok {
+        if complete {
             *self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner()) = Some(spec);
         }
     }
 
+    pub(crate) fn refresh_emoji_hidden(&self) {
+        let mut hidden = std::collections::HashSet::new();
+        if let Some(store) = &self.store {
+            let entries = match store.list_emoji_user_entries() {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!("读取 emoji 用户覆盖失败: {err}");
+                    return;
+                }
+            };
+            for entry in entries {
+                for symbol in entry.hidden {
+                    hidden.insert(crate::handle_candidate::emoji_hidden_key(
+                        &entry.word,
+                        &symbol,
+                    ));
+                }
+            }
+        }
+        *self.emoji_hidden.write().unwrap_or_else(|e| e.into_inner()) = hidden;
+    }
+
     /// 实际加载 emoji 表：解析路径 → 繁简归一 → 建/复用 `.wemj` 缓存 → mmap。
     ///
-    /// 失败一律返回 `None`（＝功能不可用），**不降级成内存表**——理由见
+    /// 返回 `(加载成功的表, 是否每张启用的表都到位)`。后者是 `sync_emoji_dict` 记 spec 的
+    /// 判据：部分成功也要如实报「不完整」，否则缺的那张补齐后要等重启才生效。
+    ///
+    /// 失败的表一律跳过（＝该表不可用），**不降级成内存表**——理由见
     /// [`moodflow_dict::emojidict::load_or_build`]：本功能是纯锦上添花的可选项，而「常驻内存
     /// 随功能数量累积」正是它要避开的东西。
-    fn load_emoji_dict(
-        categories: bool,
-    ) -> Option<std::sync::Arc<moodflow_dict::emojidict::EmojiReader>> {
+    fn load_emoji_dict(tables: &[(String, String)]) -> (Vec<EmojiTableReader>, bool) {
         let data_dir = Config::data_dir();
         let dd = data_dir.as_deref();
-
-        let Some(word) = Config::resolve_data_file(dd, "emoji/emoji_word.txt") else {
-            warn!("emoji 词表缺失（data/emoji/emoji_word.txt），扩展不可用；运行 gen-data 下载");
-            return None;
-        };
-        let mut tables = vec![word];
-        if categories {
-            match Config::resolve_data_file(dd, "emoji/emoji_category.txt") {
-                Some(p) => tables.push(p),
-                // 分类表可缺：主表照常工作，只是打「动物」不再出一串。
-                None => warn!("emoji 分类表缺失，已按仅主表加载"),
-            }
+        if tables.is_empty() {
+            return (Vec::new(), true);
         }
 
         // ★ 繁→简归一表是**必需**的，缺了不能降级成「不归一照样加载」。
@@ -4092,32 +4173,65 @@ impl Coordinator {
             warn!(
                 "emoji 繁简归一表缺失（opencc/TSCharactersDerived.octrie），扩展不可用；运行 gen-data 重建"
             );
-            return None;
+            return (Vec::new(), false);
         };
         let norm_bytes = std::fs::read(&norm_path)
             .map_err(|e| warn!("读 emoji 归一表失败 {}: {}", norm_path.display(), e))
-            .ok()?;
+            .ok();
+        let Some(norm_bytes) = norm_bytes else {
+            return (Vec::new(), false);
+        };
         let norm = moodflow_transform::s2t::Dict::parse(&norm_bytes).or_else(|| {
             warn!("emoji 归一表格式无效: {}", norm_path.display());
             None
-        })?;
+        });
+        let Some(norm) = norm else {
+            return (Vec::new(), false);
+        };
 
         let Some(cache_dir) = Config::cache_dir() else {
             warn!("无缓存目录，emoji 扩展不可用");
-            return None;
+            return (Vec::new(), false);
         };
-        let cache_file = cache_dir.join("emoji").join("emoji.wemj");
-
-        // 归一表进 `fp_extra`：它不参与解析但决定解析结果，漏传会让 OpenCC 数据升级后
-        // 旧缓存被永久复用（见 `cache_fp::EMOJI_TAG`）。
-        let r = moodflow_dict::emojidict::load_or_build(&tables, &[norm_path], &cache_file, |s| {
-            norm.convert_once(s)
-        });
-        match &r {
-            Some(d) => info!("Loaded emoji dict: {} entries", d.entry_count()),
-            None => warn!("emoji 扩展表加载失败，功能不可用"),
+        let mut readers = Vec::new();
+        let mut complete = true;
+        for (id, rel) in tables {
+            let Some(source) = Config::resolve_data_file(dd, rel) else {
+                warn!("emoji 表文件缺失: {rel}");
+                complete = false;
+                continue;
+            };
+            let mut meta = EmojiTableMeta::default_for(id);
+            if source.extension().is_some_and(|e| e == "toml")
+                && let Ok(content) = std::fs::read_to_string(&source)
+                && let Ok(parsed) = toml::from_str::<EmojiTableFile>(&content)
+                && let Some(m) = parsed.meta
+            {
+                meta = m;
+            }
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            source.to_string_lossy().hash(&mut hasher);
+            let cache_file = cache_dir
+                .join("emoji")
+                .join(format!("{:016x}.wemj", hasher.finish()));
+            let Some(reader) = moodflow_dict::emojidict::load_or_build(
+                std::slice::from_ref(&source),
+                std::slice::from_ref(&norm_path),
+                &cache_file,
+                |s| norm.convert_once(s),
+            ) else {
+                complete = false;
+                continue;
+            };
+            readers.push(EmojiTableReader {
+                max_per_word: meta.max_per_word,
+                max_hosts: meta.max_hosts,
+                min_chars: meta.min_chars,
+                reader,
+            });
         }
-        r
+        (readers, complete)
     }
 
     /// 辅助码来源缓存失效：方案切换后置 `None`，下次进入辅助码时按新方案的

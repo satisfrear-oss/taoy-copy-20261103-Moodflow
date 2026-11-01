@@ -2319,7 +2319,7 @@ impl Coordinator {
                 // 表达式模板（`{amt(unit='圆')}`）走 cmdbar 求值；变量模板在 quick-input 内
                 // 本地展开。分发在 quick-input 里按条目形态做，这里只提供求值器。
                 let eval = |text: &str, values: &moodflow_quick_input::QuickValues| {
-                    crate::quick_eval::eval_expr(text, values)
+                    crate::quick_eval::eval_expr_with_coord(text, values, Some(self))
                 };
                 // 用户调整（右键调序/停用）叠加到格式表之上。整张镜像传下去，由
                 // quick-input 按**实际渲染的类别**取用——`QuickSource::Date` 会产出

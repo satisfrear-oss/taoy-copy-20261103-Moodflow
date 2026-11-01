@@ -2436,14 +2436,15 @@ impl MessageHandler for Coordinator {
         // 详见 `mode_scope` 字段注释。
         let (old_pid, old_has_rule) = *self.mode_scope.lock().unwrap_or_else(|e| e.into_inner());
         self.update_active_compat(data.client_token);
-        // Moodflow：焦点进程与输入框类型（FR-SEN-03）；进程名在上一行刚落进缓存
-        crate::moodflow::on_focus(
-            &self.cached_proc_name(data.client_token),
-            if crate::input_diag::is_password_scope(data.input_scope_mask) {
-                moodflow_tap::Scope::Password
-            } else {
-                moodflow_tap::Scope::Normal
-            },
+        // Moodflow：焦点进程与输入框类型（FR-SEN-03）；移动端 token 没有 PID，须使用宿主包名。
+        // 在焦点处理前段一次性更新隐私闸门、诊断状态和 Hub 焦点事件，避免末尾重复上报。
+        let pid = (data.client_token >> 32) as u32;
+        self.apply_input_diag_for_app(
+            pid,
+            data.disabled,
+            data.reason,
+            data.input_scope_mask,
+            (!data.bundle_id.is_empty()).then_some(data.bundle_id.as_str()),
         );
         let new_has_rule = self
             .active_compat
@@ -2609,8 +2610,6 @@ impl MessageHandler for Coordinator {
         // ui.status.show_on_focus：切到新宿主时提示一次。按 client_token 去重——同一宿主内换
         // docMgr（Excel 单元格 ↔ 公式栏）不重复弹，见 last_focus_tip_token。
         self.show_focus_status_if_enabled(data.client_token);
-        let pid = (data.client_token >> 32) as u32;
-        self.apply_input_diag(pid, data.disabled, data.reason, data.input_scope_mask);
         Some(status)
     }
 

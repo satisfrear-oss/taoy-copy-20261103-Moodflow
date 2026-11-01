@@ -6,7 +6,7 @@
 > 单项功能的细节另见各自的设计文档（如 [buffer.md](buffer.md)、[plugin-system.md](plugin-system.md)）。
 >
 > **一句话现状（2026-10-18）**：P0、P1 完成；P2 Windows 接入的代码已合入 `main`（PR #96、#97、#98），**未真机验证**；
-> P3 Android 的 XSIME 界面移植在 PR #100（CI 全绿，未合入，**未真机验证**）；P4 二批只做了打字测速。
+> P3 Android 的 XSIME 界面移植已随 PR #100 合入（**未真机验证**）；P4 二批只做了打字测速。
 
 ## 0. 结论先行
 
@@ -150,7 +150,8 @@ XSIME 五端导入同一份标准 Rime ZIP（含 Lua/OpenCC/多方案依赖）�
 ### 2.6 九宫格拼音（Android）
 
 契约（XSIME `NineKeyPinyin.swift` 与 Android 端行为）：数字键序列 → 所有可能拼音音节组合 →
-候选；选九宫格布局时自动用拼音，选其他中文方案则回到全键盘。
+候选；多种切分按拼音引擎的首选候选排序质量排序；「选拼音」行针对第一个还没钉住的音节段，支持逐段钉住；
+选九宫格布局时自动用拼音，选其他中文方案则回到全键盘。
 
 落点：T9 序列到拼音的展开放 `moodflow-engine`（纯逻辑，以现有拼音音节表为准）；
 `moodflow_android/` 只做键盘布局。Windows 不提供。
@@ -347,7 +348,7 @@ Buffer 是 AI/翻译二批的地基；并击风险最高（TSF keyup），放最
 | P0 准备 | ✅ 许可证核查、设计文档（buffer.md、plugin-system.md）、ADR 0054/0055/0056、五笔对照、§3.6–3.8 核查 | — | `main` |
 | P1 纯逻辑 | ✅ 全部（见下表） | 不适用 | `main`（PR #96） |
 | P2 Windows | ✅ 剪贴板历史、Buffer、并击、打字测速、候选矩阵、LPAC | ⬜ 一项都没验 | `main`（PR #97、#98） |
-| P3 Android | ✅ 骨架 + XSIME 界面移植 | ⬜ 一项都没验 | 骨架在 `main`；界面移植在 PR #100 |
+| P3 Android | ✅ 骨架 + XSIME 界面移植 | ⬜ 一项都没验 | 骨架与界面移植都已在 `main`（PR #100） |
 | P4 二批 | 🟡 打字测速已做；Buffer 上的 AI 生成 / 润色 / 翻译未做 | — | — |
 
 **已完成（纯逻辑与可在 Linux 上验证的部分）**
@@ -416,7 +417,8 @@ Buffer 是 AI/翻译二批的地基；并击风险最高（TSF keyup），放最
 
 - 核心没有「本字段不学习但允许中文」的开关，所以无痕字段（`NO_PERSONALIZED_LEARNING`）暂时只能直接上屏英文；
   要放开需先在协调器加按字段关学习的开关。
-- 九宫格只取第一种切分喂引擎（多切分按引擎候选质量排序未做）；部分上屏后剩余数字串与核心组字不同步。
+- ~~九宫格只取第一种切分喂引擎（多切分按引擎候选质量排序未做）~~ **已做（§10.3 A1，未真机验证）**；
+  部分上屏后剩余数字串与核心组字不同步（A12）。
 - ~~出厂数据只含仓库 `data/`，APK 里没有拼音 / 五笔词库~~ **已补（2026-10-18，`main` 2840af6f）**：CI 先跑
   `MOODFLOW_BUILD_LOCAL=1 ./scripts/dev.sh gd` 组装 `build_dev/data`（按周缓存），Gradle `copyMoodflowData` 优先用它
   （也可 `-Pmoodflow.dataDir=` 指定），CI 检查 APK 里有 `rime_frost.dict.yaml` 与 `cn_dicts/base.dict.yaml`。
@@ -426,7 +428,7 @@ Buffer 是 AI/翻译二批的地基；并击风险最高（TSF keyup），放最
 - ~~触屏并击、候选矩阵、热区几何均未做；设置页只有宿主开关~~ **已做（PR #100，XSIME 界面移植）**，见下节。
   标点数据两端共用（§3.7 第一条）仍未核查。
 
-## P3 Android：XSIME 界面移植（2026-10-18，PR #100，评审中、未合入）
+## P3 Android：XSIME 界面移植（2026-10-18，PR #100，已合入）
 
 键盘与设置页的界面直接移植 XSIME Android（Apache-2.0，文件清单见 `NOTICE.md`），引擎换成 Moodflow 核心。
 
@@ -453,9 +455,10 @@ JNI 契约测试。AGP 构建与 APK 由 CI 验证；手势、连删、上滑、
 
 **已知缺口（门面 / 核心）**
 
-- 九宫格「选拼音」只能钉住开头的音节（`t9::pin_leading`），后续音节的拼法选择要门面支持按位置钉住。
-- 打字测速的输入经键盘照常计入日常统计：核心按「焦点在自家窗口」排除（`focus_in_own_app`），而移动端焦点上报
-  不带包名。建议 `focus_gained_with` 增加宿主包名参数并把本应用包名列入 `BUILTIN_EXCLUDED`。
+- ~~九宫格「选拼音」只能钉住开头的音节（`t9::pin_leading`）~~ **已做（§10.3 A1，未真机验证）**：门面
+  `t9::leading_syllables_at` / `pin_at` 按段钉住。
+- ~~打字测速输入计入日常统计~~ **已补（A2，2026-10-22）**：Android 焦点事件携带应用包名，
+  `com.moodflow.ime` 加入 `BUILTIN_EXCLUDED`，日常统计排除此应用（Android 上没有 Hub 与感知，这条名单在 Windows 上同样挡住感知）；应用侧把自身包名统一报成 `com.moodflow.ime`，带 `.debug` 后缀或换渠道也不会漏。测试见 `moodflow-coordinator/tests/practice_stats_exclusion.rs`。
 - 插件安装：Android 没有插件市场入口，只能列出与启停已装插件。
 - 无痕字段（`IME_FLAG_NO_PERSONALIZED_LEARNING`）仍只能直接上屏英文：核心没有「本字段不学习但允许中文」的开关。
 - 触屏并击只支持一次手势结算，XSIME 的「两段手势组合成一个音节」未做；并击方案的导入与编辑界面未移植。
@@ -496,8 +499,8 @@ JNI 契约测试。AGP 构建与 APK 由 CI 验证；手势、连删、上滑、
 
 | # | 项 | 说明 |
 |---|---|---|
-| A1 | 九宫格按位置钉住音节 | 现在只能钉住开头的音节（`t9::pin_leading`）；多切分按候选质量排序未做 |
-| A2 | 练习不计入日常统计 | `focus_gained_with` 加宿主包名参数，本应用包名进 `BUILTIN_EXCLUDED` |
+| A1 | ✅ 九宫格按位置钉住音节 | 「选拼音」行指向第一个还没钉住的音节段（含「1」键收尾的段）；最多 32 种切分逐个问拼音引擎首选候选、按其排序键排序后取第一种；钉住的音节整体保留不改切。单测覆盖，**未真机验证**（手感与每键打分耗时） |
+| A2 | ✅ 练习不计入日常统计 | Android 焦点上报包名，`com.moodflow.ime` 在 `BUILTIN_EXCLUDED` 中 |
 | A3 | 无痕字段允许中文 | 协调器加「本字段不学习」开关 |
 | A4 | 插件安装 | 没有市场入口，只能列出与启停已装插件 |
 | A5 | 两段手势并击、并击方案导入与编辑 | XSIME 有，未移植 |
@@ -507,6 +510,7 @@ JNI 契约测试。AGP 构建与 APK 由 CI 验证；手势、连删、上滑、
 | A9 | 标点数据两端共用、中文 123 页全角标点保留半角小数点 | §3.7；数字页句读后回字母页已有（`KeyboardLayout.returnsToLetters`），输入框代际已有（`FieldTracker`） |
 | A10 | 正式签名与发版 | 签名密钥、`android-vX.Y.Z` 标签、发布说明；目前只有 debug APK |
 | A11 | Android 的 Hub / 陪伴 | 不在本期（ADR 0056 第 4 条），以后另行决定 |
+| A12 | 部分上屏后同步九宫格剩余数字串与核心组字 | 候选提交前缀后需从新组合区重建 T9 状态；当前仍会清空九宫格串 |
 
 ### 10.4 二批（P4）
 

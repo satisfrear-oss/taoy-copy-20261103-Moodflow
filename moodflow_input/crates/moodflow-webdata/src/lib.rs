@@ -2022,6 +2022,8 @@ pub trait WebDataRpc: WebDataHost {
         let touched_phrase = r.restored.iter().any(|p| p == "userdata/phrases.wdict");
         // 字符类用户层进了库，运行时 registry 还是旧的——不重装就是「还原成功、判定没变」。
         let touched_charsets = r.restored.iter().any(|p| p.starts_with("charsets/"));
+        // emoji 用户表（按宿主词隐藏的符号）同理：库里换了，内存里的隐藏集要重读。
+        let touched_emoji = r.restored.iter().any(|p| p == "userdata/emoji.jsonl");
         for id in &r.schemas_touched {
             self.engine_mgr().invalidate_schema(id);
         }
@@ -2062,6 +2064,9 @@ pub trait WebDataRpc: WebDataHost {
         }
         if touched_charsets {
             self.reload_charsets();
+        }
+        if touched_emoji {
+            self.reload_emoji_hidden();
         }
         Ok(json!({
             "restored": r.restored,

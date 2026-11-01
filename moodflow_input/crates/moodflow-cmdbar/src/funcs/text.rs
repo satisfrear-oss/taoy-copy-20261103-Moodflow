@@ -1,6 +1,6 @@
 //! §3.2 文本处理函数（对照 Go funcs/text.go）。全部 `pure=true` 且 `deterministic=true`。
 //!
-//! `t2s/s2t/pinyin` 当前为占位（原样返回），待接 OpenCC / 拼音转换表（与 Go 同为 stub）。
+//! `t2s/s2t/pinyin` 经 [`EvalContext`] 委托给宿主转换能力。
 
 use super::func_specs;
 use super::util::{parse_arg_int, resolve_1based, rune_len};
@@ -20,9 +20,9 @@ pub fn specs() -> Vec<FuncSpec> {
         "split"  : Text (3, 3) det => fn_split,   "按 sep 拆分, 取第 n 段 (1 起, 支持负数)", "split(last(), \",\", 1)";
         "concat" : Text (0, -1) det => fn_concat, "字符串拼接", "concat(last(), \" \", clip())";
         "reverse": Text (1, 1) det => fn_reverse, "反转字符串 (按 rune)", "reverse(\"abc\")";
-        "t2s"    : Text (1, 1) det => fn_passthrough, "(stub) 繁→简; 暂占位原样返回", "t2s(last())";
-        "s2t"    : Text (1, 1) det => fn_passthrough, "(stub) 简→繁; 暂占位原样返回", "s2t(last())";
-        "pinyin" : Text (1, 1) det => fn_passthrough, "(stub) 汉字转拼音; 暂占位原样返回", "pinyin(last())";
+        "t2s"    : Text (1, 1) det => fn_t2s,        "繁体转简体", "t2s(last())";
+        "s2t"    : Text (1, 1) det => fn_s2t,        "简体转繁体", "s2t(last())";
+        "pinyin" : Text (1, 1) det => fn_pinyin,     "文本转带声调拼音", "pinyin(last())";
         "url"    : Text (1, 1) det => fn_url,      "URL 编码 (component)", "url(last())";
         "html"   : Text (1, 1) det => fn_html,     "HTML 实体编码", "html(last())";
         "json"   : Text (1, 1) det => fn_json,     "JSON 字符串字面量化 (含外层引号)", "json(last())";
@@ -99,8 +99,16 @@ fn fn_reverse(_: &dyn EvalContext, args: &[String]) -> Result<String> {
     Ok(args[0].chars().rev().collect())
 }
 
-fn fn_passthrough(_: &dyn EvalContext, args: &[String]) -> Result<String> {
-    Ok(args[0].clone())
+fn fn_t2s(ctx: &dyn EvalContext, args: &[String]) -> Result<String> {
+    ctx.t2s(&args[0])
+}
+
+fn fn_s2t(ctx: &dyn EvalContext, args: &[String]) -> Result<String> {
+    ctx.s2t(&args[0])
+}
+
+fn fn_pinyin(ctx: &dyn EvalContext, args: &[String]) -> Result<String> {
+    ctx.pinyin(&args[0])
 }
 
 fn fn_url(_: &dyn EvalContext, args: &[String]) -> Result<String> {
@@ -207,6 +215,25 @@ mod tests {
         assert_eq!(call(fn_concat, &["a", "b", "c"]), "abc");
         assert_eq!(call(fn_default, &["", "x"]), "x");
         assert_eq!(call(fn_default, &["y", "x"]), "y");
+    }
+
+    #[test]
+    fn text_transforms_are_delegated_to_context() {
+        let ctx = MemoryContext {
+            text_transform: Some(Box::new(|name, text| Ok(format!("{name}:{text}")))),
+            ..MemoryContext::new()
+        };
+        assert_eq!(fn_t2s(&ctx, &["漢".into()]).unwrap(), "t2s:漢");
+        assert_eq!(fn_s2t(&ctx, &["汉".into()]).unwrap(), "s2t:汉");
+        assert_eq!(fn_pinyin(&ctx, &["你好".into()]).unwrap(), "pinyin:你好");
+    }
+
+    #[test]
+    fn text_transforms_keep_legacy_identity_without_host_support() {
+        let ctx = MemoryContext::new();
+        assert_eq!(fn_t2s(&ctx, &["漢".into()]).unwrap(), "漢");
+        assert_eq!(fn_s2t(&ctx, &["汉".into()]).unwrap(), "汉");
+        assert_eq!(fn_pinyin(&ctx, &["你好".into()]).unwrap(), "你好");
     }
 
     #[test]

@@ -89,6 +89,7 @@
 | 系统短语种子 | `system.phrases.toml` | A | `data` | `coordinator.rs` → `resolve_data_file` |
 | 快捷输入格式表 | `system.quick.toml` | A | `data` | `coordinator.rs` → `resolve_data_file` |
 | 拼音读音表 | `pinyin_map.txt` | A | `data` | `coordinator.rs` → `resolve_data_file` |
+| 符号映射表 | `system.symbols.toml`（及 `[[input.emoji.tables]]` 里的其它表） | A | `data` | `coordinator.rs` 的 `load_emoji_dict` → `resolve_data_file` |
 | 主配置 | `config.toml` | B | — | `Config::load` |
 | 应用兼容规则 | `compat.toml` | B | — | `app_compat.rs::load` |
 | 简繁转换表 | `opencc/*.octrie` | **不支持** | — | `coordinator.rs` 直接拼 `data_dir` |

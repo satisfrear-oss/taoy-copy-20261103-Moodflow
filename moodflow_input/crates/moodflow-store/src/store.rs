@@ -99,6 +99,9 @@ pub(crate) const COMMON_CHARS: TableDefinition<&str, &[u8]> = TableDefinition::n
 /// 不解析。为什么用户层进库而不是目录见 [`crate::charsets`] 的模块文档。
 /// 新表无需迁移：`init_tables` 在写事务里 `open_table` 即创建。
 pub(crate) const CHARSET_USER: TableDefinition<&str, &[u8]> = TableDefinition::new("charset_user");
+/// Emoji 映射的用户覆盖：key = 宿主词，value = JSON `{added: [], hidden: []}`。
+/// 新表无需迁移：`init_tables` 在写事务里 `open_table` 即创建。
+pub(crate) const EMOJI_USER: TableDefinition<&str, &[u8]> = TableDefinition::new("emoji_user");
 /// 补全候选的**用户学习数据**：key = `"{kind}\0{text}"`，value = {count,last_used} 定长 12B。
 ///
 /// `kind` 是 [`crate::completion::CompletionKind`] 的闭集（邮箱后缀 / 网址历史）。
@@ -242,6 +245,7 @@ impl Store {
             w.open_table(QUICK_FORMAT)?;
             w.open_table(COMMON_CHARS)?;
             w.open_table(CHARSET_USER)?;
+            w.open_table(EMOJI_USER)?;
             w.open_table(COMPLETION)?;
             w.open_table(PHRASES)?;
             w.open_table(STATS_DAILY)?;

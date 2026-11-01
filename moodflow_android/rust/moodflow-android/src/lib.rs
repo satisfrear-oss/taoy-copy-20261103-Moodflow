@@ -199,14 +199,16 @@ pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeKeyDown(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeFocusGained(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     handle: jlong,
     is_private: jboolean,
+    host_app: JString,
 ) {
+    let host_app = get_string(&mut env, &host_app);
     guard((), || {
         if let Some(c) = session(handle) {
-            c.focus_gained_with(is_private != JNI_FALSE);
+            c.focus_gained_with(is_private != JNI_FALSE, &host_app);
         }
     });
 }
@@ -610,18 +612,21 @@ pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeClearCompo
     string_array(&mut env, &enc.unwrap_or_else(|| vec![String::new()]))
 }
 
-// ── 九宫格（无状态）─────────────────────────────────────────
+// ── 九宫格：切分排序要核心句柄（问引擎首选），选拼音与钉住是纯函数 ──
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeT9Segmentations(
     mut env: JNIEnv,
     _class: JClass,
+    handle: jlong,
     input: JString,
     limit: jint,
 ) -> jobjectArray {
     let input = get_string(&mut env, &input);
     let items = guard(Vec::new(), || {
-        moodflow_mobile::t9::segmentations(&input, limit.max(1) as usize)
+        session(handle)
+            .map(|core| core.ranked_t9_segmentations(&input, limit.max(1) as usize))
+            .unwrap_or_default()
     });
     string_array(&mut env, &items)
 }
@@ -631,10 +636,14 @@ pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeT9Leading(
     mut env: JNIEnv,
     _class: JClass,
     input: JString,
+    position: jint,
 ) -> jobjectArray {
     let input = get_string(&mut env, &input);
     let items = guard(Vec::new(), || {
-        moodflow_mobile::t9::leading_syllables(&input)
+        usize::try_from(position)
+            .ok()
+            .map(|position| moodflow_mobile::t9::leading_syllables_at(&input, position))
+            .unwrap_or_default()
     });
     string_array(&mut env, &items)
 }
@@ -644,11 +653,16 @@ pub extern "system" fn Java_com_moodflow_ime_jni_MoodflowNative_nativeT9Pin(
     mut env: JNIEnv,
     _class: JClass,
     input: JString,
+    position: jint,
     syllable: JString,
 ) -> jstring {
     let input = get_string(&mut env, &input);
     let syllable = get_string(&mut env, &syllable);
-    let pinned = guard(None, || moodflow_mobile::t9::pin_leading(&input, &syllable));
+    let pinned = guard(None, || {
+        usize::try_from(position)
+            .ok()
+            .and_then(|position| moodflow_mobile::t9::pin_at(&input, position, &syllable))
+    });
     opt_string(&mut env, pinned.as_deref())
 }
 

@@ -981,6 +981,11 @@ impl ReverseLookup {
             .join(sep)
     }
 
+    /// 该字符是否有拼音读音数据。
+    pub fn has_pinyin(&self, ch: char) -> bool {
+        self.pinyin.readings(ch).is_some()
+    }
+
     /// 单字在拆字库里记录的**编码**（`好` → `vbg`）；非单字、无数据均返回空串。
     ///
     /// 与 [`Self::radicals_of`] 取自同一条拆字记录的两列，刻意分开暴露：候选注释模板要能

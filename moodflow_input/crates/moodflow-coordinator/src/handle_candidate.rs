@@ -331,41 +331,123 @@ fn sole_non_emoji(candidates: &[Candidate]) -> Option<&Candidate> {
 ///   放大噪音；
 /// - 去重集合**起手装入全部既有候选文本**：词库里本来就收了那个 emoji 时不再重复给一条，
 ///   多个宿主命中同一个 emoji 时也只给一条。
-fn plan_emoji_insertions(
+///
+/// 返回值**按宿主下标升序**：逐表循环产出的顺序是「表序、表内宿主序」（符号表扩到第 2 条、
+/// word 表只扩首条时就是 `[1, 0]`），而落位两档都以升序为前提，在这里一次排好。
+fn plan_emoji_insertions_with_hidden(
     candidates: &[Candidate],
     exact_only: bool,
-    max_hosts: usize,
-    max_per_word: usize,
-    min_chars: usize,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Vec<(usize, Vec<String>)> {
-    let mut seen: std::collections::HashSet<String> =
-        candidates.iter().map(|c| c.text.clone()).collect();
-    let mut picks: Vec<(usize, Vec<String>)> = Vec::new();
-    for (i, c) in candidates.iter().enumerate().take(max_hosts) {
-        if c.is_emoji_suggestion || c.text.chars().count() < min_chars {
-            continue;
-        }
-        if exact_only && (c.is_prefix || c.is_partial) {
-            continue;
-        }
-        let Some(list) = lookup(&c.text) else {
-            continue;
-        };
-        let mut picked = Vec::new();
-        for e in list.split_whitespace() {
-            if picked.len() >= max_per_word {
-                break;
+    tables: &[crate::coordinator::EmojiTableReader],
+    hidden: &std::collections::HashSet<String>,
+) -> Vec<EmojiPick> {
+    let mut seen: std::collections::HashSet<String> = candidates
+        .iter()
+        .map(|c| emoji_dedup_key(&c.text))
+        .collect();
+    let mut picks: Vec<EmojiPick> = Vec::new();
+    for table in tables {
+        for (i, c) in candidates.iter().enumerate().take(table.max_hosts) {
+            if c.is_emoji_suggestion || c.text.chars().count() < table.min_chars {
+                continue;
             }
-            if seen.insert(e.to_string()) {
-                picked.push(e.to_string());
+            if exact_only && (c.is_prefix || c.is_partial) {
+                continue;
             }
-        }
-        if !picked.is_empty() {
-            picks.push((i, picked));
+            let Some(list) = table.reader.lookup(&c.text) else {
+                continue;
+            };
+            let picked = pick_host_symbols(&c.text, list, table.max_per_word, hidden, &mut seen);
+            if picked.is_empty() {
+                continue;
+            }
+            if let Some(p) = picks.iter_mut().find(|p| p.host_index == i) {
+                p.symbols.extend(picked);
+            } else {
+                picks.push(EmojiPick {
+                    host_index: i,
+                    host: c.text.clone(),
+                    symbols: picked,
+                });
+            }
         }
     }
+    // 同一宿主上面已合并成一项，下标两两不同，排序结果唯一。
+    picks.sort_by_key(|p| p.host_index);
     picks
+}
+
+/// 规划出的一个宿主：原列表里的下标、宿主文本、要插入的符号（已滤隐藏、已去重、已截断）。
+///
+/// 宿主文本随规划一起带出，**落位阶段不回头按下标取**：落位边插边走，插一条就把其后的
+/// 下标全部顶偏，回头读 `candidates[host_index]` 可能读到的已是别的候选——`after` 档曾因此
+/// 把 ⭐ 记在 🦍 名下，右键「不再显示此符号」随之隐藏到了错的宿主词下。
+#[derive(Debug)]
+struct EmojiPick {
+    host_index: usize,
+    host: String,
+    symbols: Vec<String>,
+}
+
+/// 一个宿主在一张表里取哪些符号：跳过该宿主下已隐藏的、`seen` 里已有的（两者都按
+/// [`emoji_dedup_key`] 归一），截到 `max_per_word`——被跳过的不占配额。
+///
+/// 候选插入（[`plan_emoji_insertions_with_hidden`]）与注释变量 `${emoji}`（`comment.rs` 的
+/// `emoji_comment_of`）共用：两条通路的「隐藏」「去重」口径一旦分叉，就是「候选里隐藏掉了、
+/// 注释里还在」或「✅ 与 ✅️ 在注释里各占一格」。
+pub(crate) fn pick_host_symbols(
+    host: &str,
+    list: &str,
+    max_per_word: usize,
+    hidden: &std::collections::HashSet<String>,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut picked = Vec::new();
+    for e in list.split_whitespace() {
+        if picked.len() >= max_per_word {
+            break;
+        }
+        if hidden.contains(&emoji_hidden_key(host, e)) {
+            continue;
+        }
+        if seen.insert(emoji_dedup_key(e)) {
+            picked.push(e.to_string());
+        }
+    }
+    picked
+}
+
+/// 符号去重键：剥掉**全部** U+FE0F（不只是尾随的那个——ZWJ 序列中间也会带）。
+fn emoji_dedup_key(text: &str) -> String {
+    text.chars().filter(|&ch| ch != '\u{fe0f}').collect()
+}
+
+/// 隐藏覆盖在内存里的键（`Coordinator::emoji_hidden`）：`宿主词 + NUL + 去重键`。
+///
+/// 写端（右键隐藏、`refresh_emoji_hidden` 从库重建）与读端（[`pick_host_symbols`]）必须共用
+/// 这一个函数：各拼各的，归一稍有出入就是「隐藏了没反应」，且完全静默。
+pub(crate) fn emoji_hidden_key(host: &str, symbol: &str) -> String {
+    format!("{host}\0{}", emoji_dedup_key(symbol))
+}
+
+/// 符号建议的覆盖数据变了之后，原地重建走哪条装配路径（见
+/// [`Coordinator::refresh_after_emoji_override`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmojiRefresh {
+    Main,
+    TempPinyin,
+    Mix,
+    /// 该模式不接 emoji 扩展，候选里不会有符号建议，也就没有要重建的。
+    Unsupported,
+}
+
+/// 与测试 `overlay_candidate_paths_apply_emoji_suggestions` 的三条装配路径一一对应。
+fn emoji_refresh_route(active: Option<ModeKind>) -> EmojiRefresh {
+    match active {
+        None => EmojiRefresh::Main,
+        Some(ModeKind::TempPinyin) => EmojiRefresh::TempPinyin,
+        Some(ModeKind::Mix(_)) => EmojiRefresh::Mix,
+        Some(_) => EmojiRefresh::Unsupported,
+    }
 }
 
 /// `show_as = "tail"` 的插入点：**最后一条常用候选之后**，且不越过任何放宽补充的候选。
@@ -397,10 +479,11 @@ fn emoji_tail_insert_at(candidates: &[Candidate]) -> usize {
 /// 三处下游依赖——引擎侧 `decide_auto_commit` 按 `code == input` 筛码表子集判唯一，词频
 /// 读写两端要求码非空，`AutoCommit` 只认 `source == CodeTable` 的显示首选。给它编个码
 /// 会同时破坏这三处。
-fn make_emoji_candidate(text: String) -> Candidate {
+fn make_emoji_candidate(text: String, host: String) -> Candidate {
     Candidate {
         text,
         is_emoji_suggestion: true,
+        emoji_host: host,
         ..Default::default()
     }
 }
@@ -619,37 +702,25 @@ impl Coordinator {
     /// 打架——用户按下键时，「下一条」可能正是刚插进来的那个 emoji。这个交互得先在真机
     /// 上定下来，不能凭空实现。
     pub(crate) fn apply_emoji_suggestions(&self, candidates: &mut Vec<Candidate>) {
-        let (scope, show_as, max_per_word, max_hosts, min_chars) = {
+        let (scope, show_as) = {
             let rt = self.rt();
             let e = &rt.config.input.emoji;
             if !e.enabled {
                 return;
             }
-            (
-                e.scope.clone(),
-                e.show_as.clone(),
-                e.max_per_word,
-                e.max_hosts,
-                e.min_word_chars,
-            )
+            (e.scope.clone(), e.show_as.clone())
         };
         // `comment` 档不进候选——它由注释模板的 `${emoji}` 变量呈现，是另一条通路。
-        if scope == "off" || show_as == "comment" || max_per_word == 0 {
+        if scope == "off" || show_as == "comment" {
             return;
         }
         let guard = self.emoji_dict.read().unwrap_or_else(|e| e.into_inner());
-        let Some(dict) = guard.as_ref() else {
+        if guard.is_empty() {
             return;
-        };
+        }
         // 未知值按最保守的一档处理（值域告警在 `sync_emoji_dict` 里发，热路径不重复告警）。
-        let picks = plan_emoji_insertions(
-            candidates,
-            scope != "all",
-            max_hosts,
-            max_per_word,
-            min_chars,
-            |t| dict.lookup(t).map(str::to_string),
-        );
+        let hidden = self.emoji_hidden.read().unwrap_or_else(|e| e.into_inner());
+        let picks = plan_emoji_insertions_with_hidden(candidates, scope != "all", &guard, &hidden);
         if picks.is_empty() {
             return;
         }
@@ -657,22 +728,94 @@ impl Coordinator {
         if show_as == "tail" {
             // 「列表末尾」＝常用候选之后（不是物理末尾）：原有序号完全不动。
             // 落点判据见 `emoji_tail_insert_at`。
+            // 宿主文本取规划带出的那份：插入点 `at` 可能在宿主之前，插过一条后
+            // `candidates[host_index]` 就不再是宿主了。
             let at = emoji_tail_insert_at(candidates);
             let mut k = 0;
-            for (_, es) in picks {
-                for e in es {
-                    candidates.insert(at + k, make_emoji_candidate(e));
+            for p in picks {
+                for e in p.symbols {
+                    candidates.insert(at + k, make_emoji_candidate(e, p.host.clone()));
                     k += 1;
                 }
             }
         } else {
-            // `after`：紧随宿主。**从后往前**插入，否则前面插入会把后面记下的下标
-            // 全部顶偏一位。
-            for (i, es) in picks.into_iter().rev() {
-                for (k, e) in es.into_iter().enumerate() {
-                    candidates.insert(i + 1 + k, make_emoji_candidate(e));
+            // `after`：紧随宿主。规划已按下标升序，这里**从后往前**插入：每次插入只顶偏
+            // 插入点之后的下标，还没处理的（更靠前的）宿主不受影响。
+            for p in picks.into_iter().rev() {
+                for (k, e) in p.symbols.into_iter().enumerate() {
+                    candidates.insert(
+                        p.host_index + 1 + k,
+                        make_emoji_candidate(e, p.host.clone()),
+                    );
                 }
             }
+        }
+    }
+
+    /// 符号建议的覆盖数据（隐藏 / 恢复）变了之后，按**当前模式**原地重建候选；
+    /// 返回是否重建了（调用方据此决定要不要重绘）。
+    ///
+    /// ⚠️ 不能一律走主路径的 `update_candidates`：它读 `input_buffer`，而临拼（进入即清空
+    /// 主缓冲）与快捷输入 / mix（编码在 `mix_buffer`）下它恒为空——走错的后果不是「不刷新」，
+    /// 而是候选窗当场清空。`candidate_op` 末尾与 `candidate_or_quick_format_op` 记着同一个坑。
+    pub(crate) fn refresh_after_emoji_override(&self, state: &mut State) -> bool {
+        let route = emoji_refresh_route(state.active);
+        if route == EmojiRefresh::Unsupported {
+            return false;
+        }
+        // 原地重建（输入没变）：直接辅助码的前缀快照带着旧候选，作废（同 `candidate_op`）。
+        state.direct_aux_prev = None;
+        match route {
+            EmojiRefresh::Main => {
+                self.update_candidates(state);
+            }
+            EmojiRefresh::TempPinyin => self.update_temp_pinyin_candidates(state),
+            EmojiRefresh::Mix => self.update_mix_candidates(state),
+            EmojiRefresh::Unsupported => {}
+        }
+        true
+    }
+
+    /// 右键菜单给不给「恢复已隐藏的符号」：该宿主词下确有隐藏项，且当前模式会出符号建议。
+    ///
+    /// 与写端 [`Self::restore_hidden_emoji`] 同一套判据——菜单给了入口而写端什么都不做
+    /// （或反过来），用户看到的是「点了没反应」，日志干净。
+    pub(crate) fn emoji_restore_offered(&self, state: &State, word: &str) -> bool {
+        if word.is_empty()
+            || self.store.is_none()
+            || emoji_refresh_route(state.active) == EmojiRefresh::Unsupported
+            || !self.rt().config.input.emoji.enabled
+        {
+            return false;
+        }
+        let prefix = emoji_hidden_key(word, "");
+        self.emoji_hidden
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|k| k.starts_with(&prefix))
+    }
+
+    /// 候选右键「恢复已隐藏的符号」的写端：清掉该宿主词的整份隐藏列表（库 + 内存索引），
+    /// 再按模式原地重建。
+    ///
+    /// 恢复是**整词粒度**而不是逐个符号：被隐藏的符号不出候选，右键点不到它本身，入口只能
+    /// 挂在宿主词上；而一个词下通常只藏过一两个，逐个挑的子菜单不值得它的复杂度。
+    fn restore_hidden_emoji(&self, state: &mut State, word: &str) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        if let Err(err) = store.clear_emoji_hidden_for_word(word) {
+            warn!("恢复已隐藏的 emoji 建议失败: {err}");
+            return;
+        }
+        let prefix = emoji_hidden_key(word, "");
+        self.emoji_hidden
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|k| !k.starts_with(&prefix));
+        if self.refresh_after_emoji_override(state) {
+            self.notify_ui_update(state);
         }
     }
 
@@ -1109,6 +1252,7 @@ impl Coordinator {
         let host = moodflow_phrase::PhraseHost {
             clip: &clip,
             reverse: &reverse,
+            transform: &|name: &str, text: &str| self.cmdbar_transform(name, text),
         };
         let mut expanded: Vec<Candidate> = Vec::with_capacity(raw.len());
         for cand in raw.into_iter() {
@@ -1298,6 +1442,7 @@ impl Coordinator {
             let host = moodflow_phrase::PhraseHost {
                 clip: &clip,
                 reverse: &reverse,
+                transform: &|name: &str, text: &str| self.cmdbar_transform(name, text),
             };
             for hit in phrases.lookup(&state.input_buffer, &recent, &host, &phrase_scope) {
                 let is_command = hit.command_src.is_some();
@@ -4469,6 +4614,37 @@ impl Coordinator {
         let cand = state.candidates[idx].clone();
         let word = cand.text.clone();
 
+        if cand.is_emoji_suggestion {
+            if !matches!(op, CandidateOp::Delete) {
+                return;
+            }
+            if !cand.emoji_host.is_empty()
+                && let Some(store) = &self.store
+            {
+                match store.hide_emoji_for_word(&cand.emoji_host, &cand.text) {
+                    Ok(_) => {
+                        self.emoji_hidden
+                            .write()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(emoji_hidden_key(&cand.emoji_host, &cand.text));
+                        if self.refresh_after_emoji_override(&mut state) {
+                            self.notify_ui_update(&state);
+                        }
+                    }
+                    Err(err) => warn!("隐藏 emoji 建议失败: {err}"),
+                }
+            }
+            return;
+        }
+
+        // 「恢复已隐藏的符号」：落点是 emoji 用户覆盖表（键 = 宿主词），与词库落点无关，故与
+        // 上面的隐藏一样分派在作用域准入之前——符号建议在临拼 / 快捷输入里照样出现，隐藏在
+        // 那里做得了，恢复也必须做得了。判据与菜单侧 `emoji_restore_offered` 同源。
+        if matches!(op, CandidateOp::RestoreHiddenSymbols) {
+            self.restore_hidden_emoji(&mut state, &word);
+            return;
+        }
+
         // 常用/生僻标记落在全局字级的覆盖表，**不需要词库落点**，故必须分派在下面那道
         // 作用域准入之前。放在后面的话，临拼/临英/混输/空码浏览态下菜单给了入口而写端
         // 直接 return —— 用户点得动、毫无反应、没有任何日志，是最难查的一类错配。
@@ -4544,9 +4720,10 @@ impl Coordinator {
                 // 双拼下混用会让短语删除静默失效——写进 `hao`、读的是 `hc`。
                 CandidateOp::Delete => self.delete_candidate_by_source(&schema, &raw_code, &cand),
                 CandidateOp::Reset => store.remove_shadow_rule(&sh_schema, &code, &word, cand_id),
-                // 不可达：它在上面就 early-return 了（落点是全局常用字覆盖表，不是 shadow）。
-                // 保持不 panic —— 菜单 id 由 IPC 回传，让一个越界值把输入法打崩不值当。
-                CandidateOp::ToggleCommon => Ok(()),
+                // 不可达：它们在上面就 early-return 了（落点分别是全局常用字覆盖表与 emoji
+                // 用户覆盖表，不是 shadow）。保持不 panic —— 菜单 id 由 IPC 回传，让一个越界值
+                // 把输入法打崩不值当。
+                CandidateOp::ToggleCommon | CandidateOp::RestoreHiddenSymbols => Ok(()),
             };
             if let Err(e) = r {
                 warn!("candidate op failed: {}", e);
@@ -5340,8 +5517,22 @@ mod sole_non_emoji_tests {
 #[cfg(test)]
 mod plan_emoji_tests {
     //! emoji 插入规划：选宿主、查表、去重、截断。
-    use super::plan_emoji_insertions;
+    use super::plan_emoji_insertions_with_hidden;
     use moodflow_candidate::Candidate;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT_TABLE: AtomicUsize = AtomicUsize::new(0);
+
+    /// 无隐藏项的规划，摊平成 `(宿主下标, 符号)` 便于断言。
+    fn plan_emoji_insertions(
+        candidates: &[Candidate],
+        exact_only: bool,
+        tables: &[crate::coordinator::EmojiTableReader],
+    ) -> Vec<(usize, Vec<String>)> {
+        plan_emoji_insertions_with_hidden(candidates, exact_only, tables, &Default::default())
+            .into_iter()
+            .map(|p| (p.host_index, p.symbols))
+            .collect()
+    }
 
     fn c(text: &str) -> Candidate {
         Candidate {
@@ -5356,19 +5547,42 @@ mod plan_emoji_tests {
             ..Default::default()
         }
     }
-    /// 词表：只认「开心」「动物」两个词。
-    fn table(t: &str) -> Option<String> {
-        match t {
-            "开心" => Some("😄 😊 🙂 😁".into()),
-            "动物" => Some("🐶 🐱".into()),
-            _ => None,
+    /// 临时 `.txt` 表 → reader（同目录下的其它测试模块也用它造表）。
+    pub(super) fn table(
+        rows: &[(&str, &str)],
+        max_hosts: usize,
+        max_per_word: usize,
+        min_chars: usize,
+    ) -> crate::coordinator::EmojiTableReader {
+        let tag = NEXT_TABLE.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "moodflow_emoji_plan_{}_{}",
+            std::process::id(),
+            tag
+        ));
+        let source = base.with_extension("txt");
+        let cache = base.with_extension("wemj");
+        let body = rows
+            .iter()
+            .map(|(k, v)| format!("{k}\t{k} {v}\n"))
+            .collect::<String>();
+        std::fs::write(&source, body).unwrap();
+        let reader =
+            moodflow_dict::emojidict::load_or_build(&[source], &[], &cache, str::to_string)
+                .unwrap();
+        crate::coordinator::EmojiTableReader {
+            max_per_word,
+            max_hosts,
+            min_chars,
+            reader,
         }
     }
 
     #[test]
     fn extends_first_host_only_by_default() {
         let v = [c("开心"), c("动物")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(got.len(), 1, "max_hosts=1 只扩首选");
         assert_eq!(got[0].0, 0);
     }
@@ -5380,10 +5594,12 @@ mod plan_emoji_tests {
     #[test]
     fn max_hosts_is_a_window_not_a_quota() {
         let v = [c("无表词"), c("开心")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert!(got.is_empty(), "窗口内首条没命中就不产出，不该顺延到第二条");
         // 窗口放大到 2 才轮得到「开心」。
-        let got = plan_emoji_insertions(&v, true, 2, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 2, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, 1);
     }
@@ -5391,7 +5607,8 @@ mod plan_emoji_tests {
     #[test]
     fn truncates_to_max_per_word() {
         let v = [c("开心")];
-        let got = plan_emoji_insertions(&v, true, 1, 2, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 2, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(got[0].1, vec!["😄".to_string(), "😊".to_string()]);
     }
 
@@ -5399,7 +5616,7 @@ mod plan_emoji_tests {
     fn skips_short_words() {
         let v = [c("开心")];
         assert!(
-            plan_emoji_insertions(&v, true, 1, 3, 3, table).is_empty(),
+            plan_emoji_insertions(&v, true, &[table(&[("开心", "😄")], 1, 3, 3)]).is_empty(),
             "min_chars=3 时两字词不触发"
         );
     }
@@ -5408,15 +5625,17 @@ mod plan_emoji_tests {
     #[test]
     fn exact_scope_skips_prefix_candidates() {
         let v = [prefix("开心")];
-        assert!(plan_emoji_insertions(&v, true, 1, 3, 2, table).is_empty());
-        assert_eq!(plan_emoji_insertions(&v, false, 1, 3, 2, table).len(), 1);
+        let tables = [table(&[("开心", "😄")], 1, 3, 2)];
+        assert!(plan_emoji_insertions(&v, true, &tables).is_empty());
+        assert_eq!(plan_emoji_insertions(&v, false, &tables).len(), 1);
     }
 
     /// 词库里本来就有那个 emoji 时不再重复给一条。
     #[test]
     fn does_not_duplicate_existing_candidate() {
         let v = [c("开心"), c("😄")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
+        let tables = [table(&[("开心", "😄 😊 🙂 😁")], 1, 3, 2)];
+        let got = plan_emoji_insertions(&v, true, &tables);
         assert_eq!(
             got[0].1,
             vec!["😊".to_string(), "🙂".to_string(), "😁".to_string()],
@@ -5424,15 +5643,35 @@ mod plan_emoji_tests {
         );
     }
 
+    #[test]
+    fn emoji_variants_with_and_without_vs16_are_deduplicated() {
+        let variants = [table(&[("奖项", "🏅️ 🏅 🎖️")], 1, 3, 2)];
+        let v = [c("奖项")];
+        let got = plan_emoji_insertions(&v, true, &variants);
+        assert_eq!(got[0].1, vec!["🏅️".to_string(), "🎖️".to_string()]);
+
+        let existing = [c("奖项"), c("🏅")];
+        let got = plan_emoji_insertions(&existing, true, &variants);
+        assert_eq!(got[0].1, vec!["🎖️".to_string()]);
+    }
+
+    #[test]
+    fn table_order_controls_priority_and_dedup_across_tables() {
+        let symbols = table(&[("勾选", "✅ ✔️")], 3, 5, 2);
+        let upstream = table(&[("勾选", "✅️ ☑️")], 1, 3, 2);
+        let got = plan_emoji_insertions(&[c("勾选")], true, &[symbols, upstream]);
+        assert_eq!(
+            got[0].1,
+            vec!["✅".to_string(), "✔️".to_string(), "☑️".to_string()]
+        );
+    }
+
     /// 两个宿主命中同一个 emoji 时只给一条。
     #[test]
     fn dedups_across_hosts() {
-        let dup = |t: &str| match t {
-            "甲词" | "乙词" => Some("🌟".to_string()),
-            _ => None,
-        };
+        let dup = [table(&[("甲词", "🌟"), ("乙词", "🌟")], 2, 3, 2)];
         let v = [c("甲词"), c("乙词")];
-        let got = plan_emoji_insertions(&v, true, 2, 3, 2, dup);
+        let got = plan_emoji_insertions(&v, true, &dup);
         assert_eq!(got.len(), 1, "第二个宿主的重复 emoji 被去掉后不产出空条目");
         assert_eq!(got[0].0, 0);
     }
@@ -5443,7 +5682,267 @@ mod plan_emoji_tests {
         let mut e = c("开心");
         e.is_emoji_suggestion = true;
         let v = [e];
-        assert!(plan_emoji_insertions(&v, true, 1, 3, 2, table).is_empty());
+        assert!(plan_emoji_insertions(&v, true, &[table(&[("开心", "😄")], 1, 3, 2)]).is_empty());
+    }
+
+    #[test]
+    fn hidden_symbol_is_scoped_to_its_host_and_ignores_fe0f() {
+        let tables = [table(&[("勾选", "✅️"), ("完成", "✅")], 2, 5, 2)];
+        let hidden = std::collections::HashSet::from(["勾选\0✅".to_string()]);
+        let got =
+            plan_emoji_insertions_with_hidden(&[c("勾选"), c("完成")], true, &tables, &hidden);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].host_index, 1, "同一符号对另一个宿主仍可见");
+        assert_eq!(got[0].host, "完成");
+        assert_eq!(got[0].symbols, ["✅"]);
+    }
+
+    /// ★ 回归：逐表循环产出的是「表序」，规划必须按宿主下标升序交出去，并带上宿主文本。
+    ///
+    /// 出厂两表就能触发：符号表 `max_hosts = 3` 扩到了第 2 条，word 表 `max_hosts = 1`
+    /// 只扩首条 ⇒ 未排序时是 `[1, 0]`，落位按升序假设走，⭐ 被插到 🦍 后面、记在 🦍 名下。
+    #[test]
+    fn picks_are_sorted_by_host_index_and_carry_host_text() {
+        let symbols = table(&[("星星", "⭐ 🌟 ✨")], 3, 5, 2);
+        let word = table(&[("猩猩", "🦍")], 1, 3, 2);
+        let got = plan_emoji_insertions_with_hidden(
+            &[c("猩猩"), c("星星")],
+            true,
+            &[symbols, word],
+            &Default::default(),
+        );
+        let flat: Vec<(usize, &str, Vec<&str>)> = got
+            .iter()
+            .map(|p| {
+                (
+                    p.host_index,
+                    p.host.as_str(),
+                    p.symbols.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            flat,
+            [(0, "猩猩", vec!["🦍"]), (1, "星星", vec!["⭐", "🌟", "✨"]),]
+        );
+    }
+
+    /// 被隐藏的符号不占 `max_per_word` 配额：后面的顺位补上来。
+    #[test]
+    fn hidden_symbols_do_not_consume_quota() {
+        let tables = [table(&[("开心", "😄 😊 🙂")], 1, 2, 2)];
+        let hidden = std::collections::HashSet::from([super::emoji_hidden_key("开心", "😄")]);
+        let got = plan_emoji_insertions_with_hidden(&[c("开心")], true, &tables, &hidden);
+        assert_eq!(got[0].symbols, ["😊", "🙂"]);
+    }
+}
+
+#[cfg(test)]
+mod emoji_suggestion_tests {
+    //! 符号建议落位、隐藏 / 恢复与 `${emoji}` 注释：要真实 `Coordinator` 的那一半。
+    //!
+    //! emoji 表直接注入 `emoji_dict`：`load_emoji_dict` 取的是安装根目录而非注入的数据目录
+    //! （见 `overlay_candidate_paths_apply_emoji_suggestions` 的说明），配置里的表清单因此置空，
+    //! 免得构造时去碰真实安装目录与缓存目录。
+    use super::plan_emoji_tests::table;
+    use super::*;
+    use crate::coordinator::EmojiTableReader;
+    use moodflow_config::config::Config;
+    use moodflow_store::store::Store;
+    use std::sync::Arc;
+
+    fn coord(tag: &str, show_as: &str, tables: Vec<EmojiTableReader>) -> Arc<Coordinator> {
+        let path = std::env::temp_dir().join(format!(
+            "moodflow_emoji_suggestion_{tag}_{}.redb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut cfg = Config::default();
+        cfg.input.emoji.enabled = true;
+        cfg.input.emoji.show_as = show_as.into();
+        cfg.input.emoji.tables = Vec::new();
+        let c =
+            Coordinator::new_headless_with_store(cfg, None, Arc::new(Store::open(&path).unwrap()));
+        *c.emoji_dict.write().unwrap() = tables;
+        c
+    }
+
+    fn cand(text: &str) -> Candidate {
+        Candidate {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    fn common(text: &str) -> Candidate {
+        Candidate {
+            text: text.into(),
+            is_common: true,
+            ..Default::default()
+        }
+    }
+
+    /// `(候选文本, 宿主)`：宿主只在符号建议上非空。
+    fn texts_and_hosts(v: &[Candidate]) -> Vec<(String, String)> {
+        v.iter()
+            .map(|c| (c.text.clone(), c.emoji_host.clone()))
+            .collect()
+    }
+
+    fn pair(text: &str, host: &str) -> (String, String) {
+        (text.to_string(), host.to_string())
+    }
+
+    /// ★ 回归（出厂两表即可触发）：`after` 档每个符号紧随**自己的**宿主、记在自己的宿主名下。
+    /// 旧实现落成 `猩猩 🦍 ⭐ 🌟 ✨ 星星`，⭐ 们的宿主记成 🦍，右键隐藏便写到了 🦍 名下。
+    #[test]
+    fn after_mode_inserts_each_symbol_behind_its_own_host() {
+        let c = coord(
+            "after",
+            "after",
+            vec![
+                table(&[("星星", "⭐ 🌟 ✨")], 3, 5, 2),
+                table(&[("猩猩", "🦍")], 1, 3, 2),
+            ],
+        );
+        let mut v = vec![cand("猩猩"), cand("星星"), cand("其他")];
+        c.apply_emoji_suggestions(&mut v);
+        assert_eq!(
+            texts_and_hosts(&v),
+            [
+                pair("猩猩", ""),
+                pair("🦍", "猩猩"),
+                pair("星星", ""),
+                pair("⭐", "星星"),
+                pair("🌟", "星星"),
+                pair("✨", "星星"),
+                pair("其他", ""),
+            ]
+        );
+    }
+
+    /// `tail` 档：插入点在宿主之前时，插过一条后不能再按下标回头取宿主。
+    #[test]
+    fn tail_mode_keeps_hosts_when_insert_point_precedes_them() {
+        let c = coord(
+            "tail",
+            "tail",
+            vec![table(&[("乙词", "🌟"), ("丙词", "🌙")], 3, 3, 2)],
+        );
+        let mut v = vec![common("甲词"), cand("乙词"), cand("丙词")];
+        c.apply_emoji_suggestions(&mut v);
+        assert_eq!(
+            texts_and_hosts(&v),
+            [
+                pair("甲词", ""),
+                pair("🌟", "乙词"),
+                pair("🌙", "丙词"),
+                pair("乙词", ""),
+                pair("丙词", ""),
+            ]
+        );
+    }
+
+    /// 进快捷输入（mix），打一个算式，返回首条候选文本（算式结果，不依赖任何词库）。
+    fn enter_quick_calc(c: &Coordinator) -> String {
+        let mut st = c.state.lock().unwrap();
+        st.active = Some(ModeKind::Mix(0));
+        st.mix_id = 0;
+        st.mix_buffer = "1+2".into();
+        c.update_mix_candidates(&mut st);
+        st.candidates
+            .first()
+            .map(|c| c.text.clone())
+            .expect("前置：出厂快捷输入对算式应给出候选")
+    }
+
+    fn candidate_texts(c: &Coordinator) -> Vec<String> {
+        let st = c.state.lock().unwrap();
+        st.candidates.iter().map(|c| c.text.clone()).collect()
+    }
+
+    /// ★ 回归：快捷输入里隐藏一个符号，候选窗不得被清空（隐藏分支曾一律走主路径
+    /// `update_candidates`，而 mix 的编码在 `mix_buffer`、主缓冲恒空）；之后右键宿主
+    /// 「恢复已隐藏的符号」，符号回来。
+    #[test]
+    fn hide_and_restore_in_quick_input_rebuild_the_mix_candidates() {
+        let c = coord("mix", "after", Vec::new());
+        let host = enter_quick_calc(&c);
+        *c.emoji_dict.write().unwrap() = vec![table(&[(host.as_str(), "🎉")], 1, 3, 1)];
+        {
+            let mut st = c.state.lock().unwrap();
+            c.update_mix_candidates(&mut st);
+        }
+        let before = candidate_texts(&c);
+        assert_eq!(
+            before.get(1).map(String::as_str),
+            Some("🎉"),
+            "前置：{before:?}"
+        );
+
+        c.candidate_op(CandidateOp::Delete, 1);
+        let after_hide = candidate_texts(&c);
+        assert!(
+            after_hide.first() == Some(&host) && !after_hide.iter().any(|t| t == "🎉"),
+            "隐藏后应按 mix 重建：宿主还在、符号消失；实际 {after_hide:?}"
+        );
+        assert!(c.emoji_restore_offered(&c.state.lock().unwrap(), &host));
+
+        c.candidate_op(CandidateOp::RestoreHiddenSymbols, 0);
+        assert_eq!(candidate_texts(&c), before, "恢复后回到隐藏前的样子");
+        assert!(!c.emoji_restore_offered(&c.state.lock().unwrap(), &host));
+        let store = c.store.as_ref().unwrap();
+        assert!(store.list_emoji_user_entries().unwrap().is_empty());
+    }
+
+    #[test]
+    fn refresh_route_covers_exactly_the_modes_that_apply_emoji() {
+        assert_eq!(emoji_refresh_route(None), EmojiRefresh::Main);
+        assert_eq!(
+            emoji_refresh_route(Some(ModeKind::TempPinyin)),
+            EmojiRefresh::TempPinyin
+        );
+        assert_eq!(
+            emoji_refresh_route(Some(ModeKind::Mix(2))),
+            EmojiRefresh::Mix
+        );
+        for m in [
+            ModeKind::TempEnglish,
+            ModeKind::Url,
+            ModeKind::Special(0),
+            ModeKind::RareChar,
+            ModeKind::Reverse,
+        ] {
+            assert_eq!(
+                emoji_refresh_route(Some(m)),
+                EmojiRefresh::Unsupported,
+                "{m:?}"
+            );
+        }
+    }
+
+    /// `show_as = "comment"`：注释变量同样认隐藏、按全部 FE0F 归一去重。
+    #[test]
+    fn comment_variable_respects_hidden_and_full_fe0f_dedup() {
+        let c = coord(
+            "comment",
+            "comment",
+            vec![
+                // 第一张表给 ZWJ 序列（FE0F 在中间），第二张给同一序列的无 FE0F 形态。
+                table(&[("彩虹旗", "🏳️‍🌈 🌈")], 1, 5, 2),
+                table(&[("彩虹旗", "🏳‍🌈 🎌")], 1, 5, 2),
+            ],
+        );
+        assert_eq!(
+            c.emoji_comment_of("彩虹旗").as_deref(),
+            Some("🏳️‍🌈 🌈 🎌"),
+            "中间带 FE0F 的序列与无 FE0F 形态是同一个符号"
+        );
+        c.emoji_hidden
+            .write()
+            .unwrap()
+            .insert(emoji_hidden_key("彩虹旗", "🌈"));
+        assert_eq!(c.emoji_comment_of("彩虹旗").as_deref(), Some("🏳️‍🌈 🎌"));
     }
 }
 
@@ -7600,7 +8099,9 @@ mod expand_stop_tests {
     /// 常用 / 生僻各取 `n` 个真实汉字：常用取出厂 `common_han.yaml` 名单里 CJK 基本区的头部，
     /// 生僻取 U+4E00 起**不在名单里**的字（该类 `outside: rare`：汉字域内名单外即生僻）。
     fn common_and_rare(dir: &Path, n: usize) -> (Vec<char>, Vec<char>) {
-        let yaml = std::fs::read_to_string(dir.join("charsets/common_han.yaml")).unwrap();
+        let yaml = std::fs::read_to_string(dir.join("charsets/common_han.yaml"))
+            .unwrap()
+            .replace("\r\n", "\n");
         let body = yaml
             .split("\n...\n")
             .nth(1)

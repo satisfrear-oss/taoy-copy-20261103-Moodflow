@@ -86,8 +86,10 @@ pub fn leading_syllables(input: &str) -> Vec<&'static str> {
 
 /// 把整串切成音节序列，最多返回 `limit` 种。
 ///
-/// 每段必须是完整音节；**最后一段**允许是某个音节的前缀（还在打）。段数少的在前，
-/// 段数相同时按音节字典序，保证输出稳定。
+/// 每段必须是完整音节；**最后一段**允许是某个音节的前缀（还在打），此时只输出已打出的那几个
+/// 字母（`644269` → `ni'hao'w`，不展开成 `wa`/`wo`/…）。串尾的 `'` 表示末段已经
+/// 打完，此时它也只切完整音节。不含数字的段是钉住的音节，原样保留（见 `pinned_syllable`）。
+/// 段数少的在前，段数相同时按音节字典序，保证输出稳定。
 pub fn segmentations(input: &str, limit: usize) -> Vec<Vec<&'static str>> {
     let mut results: Vec<Vec<&'static str>> = Vec::new();
     for (i, part) in input.split('\'').enumerate() {
@@ -95,7 +97,10 @@ pub fn segmentations(input: &str, limit: usize) -> Vec<Vec<&'static str>> {
             continue;
         }
         let is_last = i == input.split('\'').count() - 1;
-        let segs = segment_part(part.as_bytes(), is_last);
+        let segs = match pinned_syllable(part) {
+            Some(syllable) => vec![vec![syllable]],
+            None => segment_part(part.as_bytes(), is_last),
+        };
         if segs.is_empty() {
             return Vec::new();
         }
@@ -119,6 +124,20 @@ pub fn segmentations(input: &str, limit: usize) -> Vec<Vec<&'static str>> {
     results
 }
 
+/// 不含数字、且恰是一个标准音节的段：用户在「选拼音」行钉住的音节（宿主钉住时两侧都放分隔符）。
+///
+/// 它按一个音节整体使用：不再拆开（`xian` 不会变成 `xi'an`、`hao` 不会变成 `ha'o`），
+/// 也不按前缀展开（`fan` 不会变成 `fang`）——否则按候选质量排序时可能换掉用户亲手选的拼法。
+fn pinned_syllable(part: &str) -> Option<&'static str> {
+    if part.bytes().any(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    STANDARD_SYLLABLES
+        .iter()
+        .copied()
+        .find(|s| s.eq_ignore_ascii_case(part))
+}
+
 /// 切一个不含分隔符的片段。
 fn segment_part(input: &[u8], allow_partial_tail: bool) -> Vec<Vec<&'static str>> {
     // 动态规划：best[i] = 切完前 i 个输入的所有方案（只保留段数最少的若干条，防爆炸）。
@@ -131,7 +150,7 @@ fn segment_part(input: &[u8], allow_partial_tail: bool) -> Vec<Vec<&'static str>
             continue;
         }
         let prefixes = best[start].clone();
-        for s in STANDARD_SYLLABLES {
+        for &s in STANDARD_SYLLABLES {
             let end = start + s.len();
             let fits = end <= n && matches(&input[start..end], s);
             let partial = allow_partial_tail && end > n && is_prefix(&input[start..], s);
@@ -139,9 +158,13 @@ fn segment_part(input: &[u8], allow_partial_tail: bool) -> Vec<Vec<&'static str>
                 continue;
             }
             let at = end.min(n);
+            // 半截的末段只记已打出的字母（`9` → `w`/`x`/`y`/`z`），补全交给拼音引擎，与全键盘
+            // 打 `nihaow` 同一路。展开成 wa/wai/wan/… 的话，一个前缀就是几十条，会把 KEEP
+            // 挤满：`644269` 的 32 条全是 `mi'gan'…`，`ni'hao'…` 进不了窗口。
+            let syllable = if partial { &s[..n - start] } else { s };
             for p in &prefixes {
                 let mut v = p.clone();
-                v.push(s);
+                v.push(syllable);
                 best[at].push(v);
             }
             best[at].sort_by(|a, b| a.len().cmp(&b.len()).then(a.cmp(b)));
@@ -205,6 +228,32 @@ mod tests {
             segs.iter().all(|s| syllable_digits(s[0]) == "6"),
             "{segs:?}"
         );
+    }
+
+    #[test]
+    fn a_pinned_syllable_is_kept_whole() {
+        let segs = segmentations("xian'26", 20);
+        assert!(!segs.is_empty(), "{segs:?}");
+        // 不拆成 xi'an / ha'o，也不展开成 fang
+        assert!(segs.iter().all(|s| s[0] == "xian"), "{segs:?}");
+        assert_eq!(segmentations("ni'hao'", 20), vec![vec!["ni", "hao"]]);
+        assert_eq!(segmentations("fan", 20), vec![vec!["fan"]]);
+        // 串尾分隔符：末段已打完，只切完整音节
+        assert_eq!(segmentations("64'", 20), vec![vec!["mi"], vec!["ni"]]);
+    }
+
+    #[test]
+    fn half_typed_tail_keeps_only_the_typed_letters() {
+        let segs = segmentations("644269", 32);
+        assert!(segs.iter().any(|s| s == &["ni", "hao", "w"]), "{segs:?}");
+        assert!(
+            segs.iter().all(|s| s.last().is_some_and(|t| t.len() == 1)),
+            "{segs:?}"
+        );
+        // 已打的字母恰是完整音节时与补全合并：han / hang 只剩 han
+        let segs = segmentations("64426", 32);
+        assert!(segs.iter().all(|s| !s.contains(&"hang")), "{segs:?}");
+        assert!(segs.iter().any(|s| s == &["ni", "han"]), "{segs:?}");
     }
 
     #[test]

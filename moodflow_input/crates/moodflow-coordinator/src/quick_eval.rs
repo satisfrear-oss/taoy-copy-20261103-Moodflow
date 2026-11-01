@@ -6,6 +6,7 @@
 //! 求值用 [`Registry::quick`]（纯函数 + `quick` 取值函数族，**不含动作函数**）：
 //! 格式表描述的是候选长什么样，不该能改剪贴板、按键或配置。
 
+use crate::coordinator::Coordinator;
 use chrono::{DateTime, Local};
 use moodflow_cmdbar::{EvalContext, PhraseEval, Registry, Services, evaluate_phrase};
 use moodflow_quick_input::{FormatTable, QuickValues};
@@ -13,11 +14,11 @@ use tracing::{debug, warn};
 
 /// 格式表专用求值上下文。
 ///
-/// 除 `quick_var` 外一律给空/默认：格式表只做「把解析出的量排成一句话」，
-/// 剪贴板、选区、前台进程与它无关，暴露出去只会让人写出依赖环境的格式。
+/// 只提供本次解析值、宿主文本转换与时钟；剪贴板、选区、前台进程与格式表无关。
 struct QuickCtx<'a> {
     values: &'a QuickValues,
     now: DateTime<Local>,
+    coord: Option<&'a Coordinator>,
 }
 
 impl EvalContext for QuickCtx<'_> {
@@ -47,6 +48,18 @@ impl EvalContext for QuickCtx<'_> {
         // 放开只会让人写出依赖词库状态的格式（同一串数字在不同方案下出不同结果）。
         String::new()
     }
+    fn s2t(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.coord
+            .map_or_else(|| Ok(text.to_string()), |coord| coord.cmdbar_s2t(text))
+    }
+    fn t2s(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.coord
+            .map_or_else(|| Ok(text.to_string()), |coord| coord.cmdbar_t2s(text))
+    }
+    fn pinyin(&self, text: &str) -> moodflow_cmdbar::Result<String> {
+        self.coord
+            .map_or_else(|| Ok(text.to_string()), |coord| coord.cmdbar_pinyin(text))
+    }
     fn now(&self) -> DateTime<Local> {
         self.now
     }
@@ -68,10 +81,20 @@ fn quick_registry() -> &'static Registry {
 ///
 /// 这是**热路径**（每次按键刷新候选都会走），故失败只记 `debug`：模板写错是配置态
 /// 而非偶发故障，每次按键 warn 一次会把日志刷爆。诊断由 [`precheck`] 在启动时一次性给出。
+#[cfg(test)]
 pub(crate) fn eval_expr(text: &str, values: &QuickValues) -> Option<String> {
+    eval_expr_with_coord(text, values, None)
+}
+
+pub(crate) fn eval_expr_with_coord(
+    text: &str,
+    values: &QuickValues,
+    coord: Option<&Coordinator>,
+) -> Option<String> {
     let ctx = QuickCtx {
         values,
         now: Local::now(),
+        coord,
     };
     match evaluate_phrase(text, &ctx, quick_registry()) {
         Ok(PhraseEval::Single {
@@ -135,6 +158,7 @@ pub(crate) fn precheck(table: &FormatTable) {
         let ctx = QuickCtx {
             values,
             now: Local::now(),
+            coord: None,
         };
         if let Err(e) = evaluate_phrase(&entry.text, &ctx, quick_registry()) {
             warn!(
@@ -221,9 +245,6 @@ mod tests {
     }
 
     /// 内置的通用文本函数照常可用，可与 quick 取值函数复合。
-    ///
-    /// ⚠️ `s2t` / `pinyin` 目前是 **stub（原样返回）**，繁体金额、数字读音这类需求
-    /// 要等 cmdbar 补上实现，别在文档里承诺。
     #[test]
     fn builtin_text_funcs_compose_with_quick_funcs() {
         let n = QuickValues::Number {
@@ -240,7 +261,7 @@ mod tests {
         };
         assert_eq!(eval_expr("{default(amt(), '—')}", &d).unwrap(), "—");
 
-        // 现状记录：stub 函数原样返回（不是本改动引入的，改动时会红）
+        // 无 coordinator 的纯单测上下文保留默认直通；运行时表达式会注入宿主转换器。
         assert_eq!(eval_expr("{s2t(amt())}", &n).unwrap(), "壹佰贰拾叁元整");
     }
 

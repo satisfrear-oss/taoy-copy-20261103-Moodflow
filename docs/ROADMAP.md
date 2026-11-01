@@ -52,10 +52,10 @@
 | 配置 | ✅ | `moodflow-config`：三层合并、字段注册表、补丁、段级降级、写回闸门 | [deferred-config-features.md](deferred-config-features.md) 里的遗留项（§6.6） |
 | 方案（schema 级按键 / 标点 / 候选 / 短语） | ✅ | `moodflow-config/src/schema.rs`；`schema-scoped-behavior.md` 四阶段已实施 | 未真机 |
 | 主题 | 🟡 几乎完成 | `moodflow-theme`；`redesign/theme-migration-plan.md` T1–T6 全部完成；7 套内置主题 | 虚线 / 点线边框绘制；编辑器侧在外部仓 MoodflowThemeEditor |
-| 命令栏（DSL + 内置函数） | 🟡 大部分 | `moodflow-cmdbar`：74 个内置函数 | 5 个仍是桩：`ask`、`pick`（`funcs/action.rs`）、`t2s`、`s2t`、`pinyin`（`funcs/text.rs`，原样返回；`moodflow-transform` 已有真正的转换器可接） |
+| 命令栏（DSL + 内置函数） | 🟡 大部分 | `moodflow-cmdbar`：74 个内置函数；`t2s` / `s2t` 接 OpenCC，`pinyin` 接带调读音表并按词消歧 | 2 个仍是桩：`ask`、`pick`（`funcs/action.rs`） |
 | 设置 RPC | ✅ | `crates/moodflow-rpc`（system / config / compat / keys）+ `moodflow-webdata`（dict / temp / freq / shadow / stats / phrase / theme / schema / backup / scheme），热重载 `config.reload` | `apps/rpc` 是 22 行的废桩，应删除；设置界面在外部仓 `moodflow-setting`，未在本仓核对 |
 | 表现层协议 | ✅ | `moodflow-ui-types` 的 `UiCommand`（62 个变体） | — |
-| 简繁转换 | ✅ | `moodflow-transform/src/s2t.rs`（OpenCC），`[input.s2t]`，`keys.toggle_s2t` | 命令栏的 `s2t()` / `t2s()` 未接 |
+| 简繁转换 | ✅ | `moodflow-transform/src/s2t.rs`（OpenCC），`[input.s2t]`，`keys.toggle_s2t`；命令栏与快捷表达式的 `s2t()` / `t2s()` 共用转换器 | — |
 | IPC / 桥接 | ✅ | `moodflow-ipc`、`moodflow-bridge`（管道、UDS、共享内存、命名事件、SDDL 含 LPAC） | LPAC 真机确认（§6.1） |
 | 按键注入 | ✅ | `moodflow-keys/src/key_inject.rs` | Linux 不走 XTest（设计如此）；macOS 不能设 Caps Lock（系统限制） |
 | 备份 / 导入导出 | ✅ | `moodflow-transfer`：bundle、merge、方案包 `.wpkg`、主题包、Rime 导入；`backup.*`、`dict.*`、`scheme.*`、`theme.*` RPC | `import-export-backup-plan-p4.md` 剩 1 项未勾（待核） |
@@ -91,7 +91,7 @@
 
 | # | 项 | 需要 | 细节 |
 |---|---|---|---|
-| 1 | 评审并合入 PR #100（Android XSIME 界面） | 维护者 | — |
+| 1 | ✅ 评审并合入 PR #100（Android XSIME 界面），已合入 | 维护者 | — |
 | 2 | Windows 真机验收 XSIME 功能：Buffer、剪贴板历史、并击不吞键、候选矩阵、用户库异常提示、换 AI 地址须重填密钥；记事本 / Word / 浏览器 / 企业微信 | Windows 桌面 | [计划 §10.1](design/xsime-feature-port-plan.md) V1 |
 | 3 | LPAC 宿主（新版搜索框）出字；之后收窄 `WD` / `AC` 的 `GA` | Windows 桌面 | 计划 §10.1 V2 |
 | 4 | 无组字时不请求写编辑会话（抓日志）；竖排候选是否被截断 | Windows 桌面 | 计划 §10.1 V3、V4 |
@@ -110,7 +110,7 @@
 | 4 | 剪贴板历史跨输入法全局可用（待定） | W6 |
 | 5 | Rime 导入、并击方案编辑的界面入口 | W7、W8 |
 | 6 | 安装器按数据清单校验；用户词库恢复文档与只读导出 | W9、W10 |
-| 7 | 命令栏 5 个桩函数（`ask`、`pick`、`t2s`、`s2t`、`pinyin`） | §4 命令栏一行 |
+| 7 | 命令栏 2 个桩函数（`ask`、`pick`） | §4 命令栏一行 |
 | 8 | 主题虚线 / 点线边框 | `redesign/theme-toml-migration-plan.md` §2 |
 | 9 | `set_shuangpin_layout` 从旧配置重置当前方案 | `design/per-app-overrides.md` |
 | 10 | 删除废桩 `apps/rpc` | §4 设置 RPC 一行 |
@@ -119,8 +119,8 @@
 
 | # | 项 | 细节 |
 |---|---|---|
-| 1 | 九宫格按位置钉住音节、多切分排序 | 计划 §10.3 A1 |
-| 2 | 练习不计入日常统计（焦点上报带包名） | A2 |
+| 1 | ✅ 九宫格按位置钉住音节、多切分按引擎首选候选质量排序（单测覆盖，未真机验证） | 计划 §10.3 A1 |
+| 2 | ✅ 练习不计入日常统计（Android 焦点上报包名并加入内置排除） | A2 |
 | 3 | 无痕字段允许中文（协调器「本字段不学习」开关） | A3 |
 | 4 | 插件安装（与 Google Play 政策核查一起做） | A4、[插件 §11](design/plugin-system.md) P8 |
 | 5 | 两段手势并击、并击方案导入与编辑、Rime 导入入口 | A5、A8 |
@@ -128,6 +128,7 @@
 | 7 | 标点数据两端共用；123 页全角标点保留半角小数点 | A9 |
 | 8 | 正式签名、`android-vX.Y.Z` 发布流程 | A10 |
 | 9 | Android 上的 Hub / 陪伴 | 不在本期（ADR 0056），以后另行决定 |
+| 10 | 部分上屏后同步九宫格数字串与核心剩余组字 | A12 |
 
 ### 6.4 插件系统
 
@@ -164,7 +165,7 @@
 | 1 | 未实现的配置项：`input.auto_pair.blacklist`、`temp_pinyin.z_include_on_commit`、各 `*accent_color` / `mode_accent_border`、`ui.font.gdi_*` / `menu_*`、`ui.theme.editor_auto_start`、`features.stats.retain_days`、`alpha_providers.*` | [deferred-config-features.md](deferred-config-features.md) |
 | 2 | 代码默认与出厂数据不一致：`chinese_pairs`（代码有「」『』、数据没有）、`english_pairs` 的 `<>`、`url.prefixes` 的 `bbs.` | 同上 |
 | 3 | 设置端页面：兼容（按应用）页、辅助码来源行 | `design/compat-settings-ui.md`、`design/aux-code-settings-ui.md`（设置界面在外部仓 `moodflow-setting`） |
-| 4 | 内置符号组文件 `data/system.symbols.toml` | `design/text-mapping-tables.md`（未实施） |
+| 4 | 多表与用户自定义文本映射 | `design/text-mapping-tables.md`；P1 内置符号表、P2 每表开关 / 阈值元数据 / 独立 reader 已实现；P3 已做按词隐藏与恢复，用户自定义映射与编辑入口待做；§3.2 准则 1、2 的数据依赖测试待做 |
 | 5 | 方案级用户数据 | `design/schema-scoped-user-data.md`（设计草案，待拍板） |
 
 ### 6.7 陪伴（Hub）侧

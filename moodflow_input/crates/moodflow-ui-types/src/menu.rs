@@ -58,6 +58,11 @@ pub enum CandidateOp {
     /// （键 = 那个字）。菜单只给一项，文案按当前判定二选一——「设为生僻字」/「设为常用字」，
     /// 故不需要两个变体。
     ToggleCommon,
+    /// 恢复该宿主词下被「不再显示此符号」隐藏掉的全部符号建议。
+    ///
+    /// 挂在**宿主词**而不是符号上：被隐藏的符号不再出候选，右键点不到它本身。落点是 emoji
+    /// 用户覆盖表（键 = 宿主词），与 shadow 无关；菜单只在该词下确有隐藏项时给出。
+    RestoreHiddenSymbols,
 }
 
 /// 功能主菜单命令（对齐 Go 统一菜单）
@@ -278,6 +283,7 @@ impl MenuKind {
                 CandidateOp::Delete => 13,
                 CandidateOp::Reset => 14,
                 CandidateOp::ToggleCommon => 15,
+                CandidateOp::RestoreHiddenSymbols => 16,
             },
             MenuKind::Command(cmd) => match cmd {
                 MenuCmd::SchemaEnglish => 100,
@@ -360,6 +366,7 @@ impl MenuKind {
             13 => return Some(MenuKind::Op(CandidateOp::Delete)),
             14 => return Some(MenuKind::Op(CandidateOp::Reset)),
             15 => return Some(MenuKind::Op(CandidateOp::ToggleCommon)),
+            16 => return Some(MenuKind::Op(CandidateOp::RestoreHiddenSymbols)),
             100 => MenuCmd::SchemaEnglish,
             101 => MenuCmd::TogglePunct,
             102 => MenuCmd::ToggleWidth,

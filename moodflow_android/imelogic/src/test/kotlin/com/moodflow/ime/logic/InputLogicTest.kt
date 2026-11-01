@@ -68,13 +68,48 @@ class T9InputTest {
         t.replaceWith("ni'4")
         t.backspace()
         assertEquals("ni'", t.text)
-        assertEquals("ni", t.query)
+        assertEquals("钉住音节后的分隔符原样交给切分", "ni'", t.query)
         t.backspace()
         assertEquals("删掉钉住音节的分隔符，音节还原成数字", "64", t.text)
         t.backspace()
         t.backspace()
         assertTrue(t.isEmpty)
         assertFalse(t.backspace())
+    }
+
+    @Test
+    fun activeSegmentIsTheFirstUnpinnedOne() {
+        val t = T9Input()
+        t.replaceWith("ni'426")
+        assertEquals(1, t.activeSegmentIndex)
+        t.pressSeparator()
+        assertEquals("「1」键收尾的段还没钉住，仍是它", 1, t.activeSegmentIndex)
+        t.replaceWith("ni'hao'")
+        assertEquals("全部钉完：指向末尾的空段", 2, t.activeSegmentIndex)
+    }
+
+    @Test
+    fun segmentClosedWithSeparatorStaysPickable() {
+        val t = T9Input()
+        t.pressDigit('6')
+        t.pressDigit('4')
+        t.pressSeparator()
+        "426".forEach { t.pressDigit(it) }
+        assertEquals("64'426", t.text)
+        assertEquals("先给 64 选拼音，而不是只能选 426", 0, t.activeSegmentIndex)
+        t.replaceWith("ni'426")
+        assertEquals(1, t.activeSegmentIndex)
+    }
+
+    @Test
+    fun pinnedSyllableKeepsItsBoundaryInQuery() {
+        val t = T9Input()
+        t.replaceWith("fan'")
+        assertEquals("末尾分隔符 = 音节已打完，不能去掉让切分再展开", "fan'", t.query)
+        t.pressDigit('6')
+        t.pressDigit('4')
+        t.pressSeparator()
+        assertEquals("fan'64'", t.query)
     }
 
     @Test

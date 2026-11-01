@@ -2352,6 +2352,17 @@ impl Coordinator {
         // 快捷输入的格式候选：判据独立于 candidate_op_scope（后者问「有没有词库落点」，
         // 混输没有，返回 None 是对的）。与写端 `candidate_or_quick_format_op` 同源。
         let quick = self.quick_format_scope(&state, page_local);
+        // 「恢复已隐藏的符号」：判据与写端同源（`emoji_restore_offered`），宿主是格式候选
+        // 还是普通词条都成立，故先算好、两个分支都挂。
+        let restore_symbols =
+            (!cand.is_emoji_suggestion && self.emoji_restore_offered(&state, &word)).then(|| {
+                M::leaf(
+                    "恢复已隐藏的符号",
+                    MenuKind::Op(CandidateOp::RestoreHiddenSymbols),
+                    true,
+                    false,
+                )
+            });
         drop(state);
 
         let op = |o: CandidateOp| MenuKind::Op(o);
@@ -2382,8 +2393,9 @@ impl Coordinator {
                 // 但两个菜单互斥出现，用户不会同时看到。
                 M::leaf("恢复默认", op(CandidateOp::Reset), has_adjust, false),
                 M::separator(),
-                M::leaf("复制", MenuKind::Copy, true, false),
             ];
+            items.extend(restore_symbols);
+            items.push(M::leaf("复制", MenuKind::Copy, true, false));
             // 「更多…」理由见下方词条菜单同一处。
             #[cfg(all(target_os = "linux", ext_presenter))]
             items.extend([
@@ -2402,6 +2414,25 @@ impl Coordinator {
             });
             return;
         }
+        if cand.is_emoji_suggestion {
+            let items = vec![
+                M::leaf(
+                    "不再显示此符号",
+                    op(CandidateOp::Delete),
+                    self.store.is_some() && !cand.emoji_host.is_empty(),
+                    false,
+                ),
+                M::separator(),
+                M::leaf("复制", MenuKind::Copy, true, false),
+            ];
+            self.mark_menu_open(page_local, word);
+            let _ = self.ui_tx.send(UiCommand::ShowCandidateMenu {
+                items,
+                anchor: MenuAnchor::at_point(x, y),
+            });
+            return;
+        }
+
         // 常用/生僻标记：作用域是**全局的那个字**，与词库落点无关，故对上面那两类
         // 「只有复制」的状态同样成立——它只要求 `cand.text` 是**单个可登记的字符**
         // （`is_markable`：空白与控制字符以外全放行）。issue #83 起不再限定汉字：
@@ -2467,6 +2498,7 @@ impl Coordinator {
         // 分支里各写一份正是「加一项时漏改另一处」的经典入口，而漏改的表现是
         // 「同一个字在临拼下右键没有这一项」——用户绝不会想到那是分支写重了。
         items.extend(common_item);
+        items.extend(restore_symbols);
         items.push(M::leaf("复制", MenuKind::Copy, true, false));
         // Linux 没有工具栏也没有托盘：组字时通往主菜单的只剩候选窗空白处右键，而候选窗
         // 几乎没有空白。借候选菜单末尾给一个「更多…」（同工具栏分格菜单那一项，同一个

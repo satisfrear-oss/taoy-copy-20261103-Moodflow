@@ -1188,21 +1188,36 @@ impl crate::coordinator::Coordinator {
     /// 只在 `show_as = "comment"` 档返回非空 —— 理由见调用点的注释（四档互斥，避免同一个
     /// emoji 既进候选又进注释）。功能关、表没加载、没命中一律 `None`；调用点把它换成空串，
     /// 模板据此整段消失。
-    fn emoji_comment_of(&self, text: &str) -> Option<String> {
-        let (max_per_word, min_chars) = {
+    ///
+    /// 取哪些符号与候选插入共用 [`crate::handle_candidate::pick_host_symbols`]：右键隐藏过的
+    /// 符号在这里同样不出现，去重同样按剥掉全部 FE0F 的形态比。
+    pub(crate) fn emoji_comment_of(&self, text: &str) -> Option<String> {
+        {
             let rt = self.rt();
             let e = &rt.config.input.emoji;
-            if !e.enabled || e.show_as != "comment" || e.max_per_word == 0 {
+            if !e.enabled || e.show_as != "comment" {
                 return None;
             }
-            (e.max_per_word, e.min_word_chars)
-        };
-        if text.chars().count() < min_chars {
-            return None;
         }
+        // 锁序同 `apply_emoji_suggestions`：先表、后隐藏索引。
         let guard = self.emoji_dict.read().unwrap_or_else(|e| e.into_inner());
-        let list = guard.as_ref()?.lookup(text)?;
-        let picked: Vec<&str> = list.split_whitespace().take(max_per_word).collect();
+        let hidden = self.emoji_hidden.read().unwrap_or_else(|e| e.into_inner());
+        let mut seen = std::collections::HashSet::new();
+        let mut picked: Vec<String> = Vec::new();
+        for table in guard.iter() {
+            if text.chars().count() < table.min_chars {
+                continue;
+            }
+            if let Some(list) = table.reader.lookup(text) {
+                picked.extend(crate::handle_candidate::pick_host_symbols(
+                    text,
+                    list,
+                    table.max_per_word,
+                    &hidden,
+                    &mut seen,
+                ));
+            }
+        }
         if picked.is_empty() {
             None
         } else {
