@@ -1024,6 +1024,12 @@ scope = "exact"
 #   tail   追加在常用候选之后，原有序号不变
 show_as = "after"
 
+# 挂载的映射表，顺序即合并优先级（前面的表先出、同一个符号只出一次）。
+# 每张表的阈值（每词最多几个、只给前几个候选挂、最少几个字）写在表文件自己的 [meta] 里。
+#   symbols   出厂符号表：标记符号与希腊字母（system.symbols.toml）
+#   word      emoji 词表：「星星」→ ⭐🌟✨
+#   category  emoji 分类表：「动物」「水果」等分类词带出整组，出厂关
+# 用户层写 [[input.emoji.tables]] 会整组替换这份列表；要停用某张表把它的 enabled 改成 false。
 [[input.emoji.tables]]
 id = "symbols"
 path = "system.symbols.toml"

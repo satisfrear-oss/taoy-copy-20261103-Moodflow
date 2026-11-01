@@ -170,6 +170,13 @@ const RETIRED_KEYS: &[&[&str]] = &[
     // 从未随发布版到用户手里（判据同上面 english_code_scope）。
     &["input", "reverse", "enabled"],
     &["schema", "codetable", "lookup_disabled_dicts"],
+    // 符号映射改成多表（docs/design/text-mapping-tables.md）：每张表的阈值写在表文件自己的
+    // `[meta]` 里，这三个全局阈值不再有人读。**不做值迁移**：同一个数字套到每张表上反而不对
+    // （符号表 `max_hosts=3`、emoji 词表 `max_hosts=1`），要调阈值就复制一份表文件改 `[meta]`。
+    // `categories` 不在此列——它有逐层值迁移（并入 `tables` 里 `category` 表的 `enabled`）。
+    &["input", "emoji", "max_per_word"],
+    &["input", "emoji", "max_hosts"],
+    &["input", "emoji", "min_word_chars"],
     // ⛔ `ui.candidate.comment_max_chars`（已拆成 `_vertical` / `_horizontal`）**刻意不登记**。
     //
     // 本清单的不变量是上一段那句「删掉不改变任何生效值」，而该键**仍在被读取**——

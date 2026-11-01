@@ -124,6 +124,9 @@ pub trait WebDataHost {
     /// 重新装配字符类 registry。备份还原写了库之后必须调，否则运行时还是旧的。
     fn reload_charsets(&self);
 
+    /// 重读「按宿主词隐藏的符号」。备份还原写了 emoji 用户表之后必须调，否则候选里还是旧的隐藏集。
+    fn reload_emoji_hidden(&self);
+
     /// 兼容规则（`compat.toml`）被设置端写过之后调：重载规则表并让前台进程立即生效。
     fn reload_compat(&self);
 
@@ -350,6 +353,9 @@ impl WebDataHost for Coordinator {
     }
     fn reload_charsets(&self) {
         Coordinator::reload_charsets(self)
+    }
+    fn reload_emoji_hidden(&self) {
+        Coordinator::refresh_emoji_hidden(self)
     }
     fn reload_compat(&self) {
         Coordinator::reload_compat_and_refresh(self)

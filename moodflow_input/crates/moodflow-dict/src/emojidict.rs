@@ -428,6 +428,34 @@ pub fn load_or_build(
 mod tests {
     use super::*;
 
+    /// 出厂符号表的编写准则 3、4（docs/design/text-mapping-tables.md §3.2）：不依赖词库数据，
+    /// 直接对仓里的 `data/system.symbols.toml` 校验。准则 1、2 要查生成后的词库，尚未落测试。
+    #[test]
+    fn bundled_symbol_table_follows_authoring_rules() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../data/system.symbols.toml"
+        );
+        let content = std::fs::read_to_string(path).expect("出厂符号表应在 data/ 下");
+        let meta: toml::Value = toml::from_str(&content).unwrap();
+        let min_chars = meta["meta"]["min_chars"].as_integer().unwrap() as usize;
+        let rows = parse_symbols_toml(&content).unwrap();
+        assert!(!rows.is_empty());
+        for (key, symbols) in &rows {
+            // 准则 3：键长 ≥ min_chars，否则这条永远被字数门槛挡掉。
+            assert!(
+                key.chars().count() >= min_chars,
+                "「{key}」短于 min_chars={min_chars}，永远不会触发"
+            );
+            // 准则 4：同一条里同一个符号只出现一次（按剥掉 U+FE0F 归一），否则白占配额。
+            let mut seen = std::collections::HashSet::new();
+            for sym in symbols {
+                let norm: String = sym.chars().filter(|c| *c != '\u{fe0f}').collect();
+                assert!(seen.insert(norm), "「{key}」里的 {sym} 重复了");
+            }
+        }
+    }
+
     fn rows(v: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
         v.iter()
             .map(|(t, es)| {
