@@ -6,7 +6,7 @@
 > 单项功能的细节另见各自的设计文档（如 [buffer.md](buffer.md)、[plugin-system.md](plugin-system.md)）。
 >
 > **一句话现状（2026-10-18）**：P0、P1 完成；P2 Windows 接入的代码已合入 `main`（PR #96、#97、#98），**未真机验证**；
-> P3 Android 的 XSIME 界面移植在 PR #100（CI 全绿，未合入，**未真机验证**）；P4 二批只做了打字测速。
+> P3 Android 的 XSIME 界面移植已随 PR #100 合入（**未真机验证**）；P4 二批只做了打字测速。
 
 ## 0. 结论先行
 
@@ -348,7 +348,7 @@ Buffer 是 AI/翻译二批的地基；并击风险最高（TSF keyup），放最
 | P0 准备 | ✅ 许可证核查、设计文档（buffer.md、plugin-system.md）、ADR 0054/0055/0056、五笔对照、§3.6–3.8 核查 | — | `main` |
 | P1 纯逻辑 | ✅ 全部（见下表） | 不适用 | `main`（PR #96） |
 | P2 Windows | ✅ 剪贴板历史、Buffer、并击、打字测速、候选矩阵、LPAC | ⬜ 一项都没验 | `main`（PR #97、#98） |
-| P3 Android | ✅ 骨架 + XSIME 界面移植 | ⬜ 一项都没验 | 骨架在 `main`；界面移植在 PR #100 |
+| P3 Android | ✅ 骨架 + XSIME 界面移植 | ⬜ 一项都没验 | 骨架与界面移植都已在 `main`（PR #100） |
 | P4 二批 | 🟡 打字测速已做；Buffer 上的 AI 生成 / 润色 / 翻译未做 | — | — |
 
 **已完成（纯逻辑与可在 Linux 上验证的部分）**
@@ -427,7 +427,7 @@ Buffer 是 AI/翻译二批的地基；并击风险最高（TSF keyup），放最
 - ~~触屏并击、候选矩阵、热区几何均未做；设置页只有宿主开关~~ **已做（PR #100，XSIME 界面移植）**，见下节。
   标点数据两端共用（§3.7 第一条）仍未核查。
 
-## P3 Android：XSIME 界面移植（2026-10-18，PR #100，评审中、未合入）
+## P3 Android：XSIME 界面移植（2026-10-18，PR #100，已合入）
 
 键盘与设置页的界面直接移植 XSIME Android（Apache-2.0，文件清单见 `NOTICE.md`），引擎换成 Moodflow 核心。
 

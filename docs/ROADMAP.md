@@ -91,7 +91,7 @@
 
 | # | 项 | 需要 | 细节 |
 |---|---|---|---|
-| 1 | 评审并合入 PR #100（Android XSIME 界面） | 维护者 | — |
+| 1 | ✅ 评审并合入 PR #100（Android XSIME 界面），已合入 | 维护者 | — |
 | 2 | Windows 真机验收 XSIME 功能：Buffer、剪贴板历史、并击不吞键、候选矩阵、用户库异常提示、换 AI 地址须重填密钥；记事本 / Word / 浏览器 / 企业微信 | Windows 桌面 | [计划 §10.1](design/xsime-feature-port-plan.md) V1 |
 | 3 | LPAC 宿主（新版搜索框）出字；之后收窄 `WD` / `AC` 的 `GA` | Windows 桌面 | 计划 §10.1 V2 |
 | 4 | 无组字时不请求写编辑会话（抓日志）；竖排候选是否被截断 | Windows 桌面 | 计划 §10.1 V3、V4 |
