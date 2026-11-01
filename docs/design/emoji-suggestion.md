@@ -273,11 +273,12 @@ staging 时只放 exe/dll/`data/`/uninstall.exe，`build_dev/data/` 顶层与 `d
 enabled = false               # 出厂关（同 aux_code / short_code_yield）
 scope = "exact"               # off | exact（只扩精确整词命中）| all
 show_as = "after"             # after | tail | comment
-max_per_word = 3              # 一个词最多产出几个 emoji（挡住「動物 → 90 个」）
-max_hosts = 1                 # 只对前 N 个候选扩展（show_as = focus 时忽略）
-min_word_chars = 2            # 单字不触发（「一 → 1️⃣」噪音最大）
-categories = false            # emoji_category.txt 单独开关，出厂关
 ```
+
+> 2026-10 更新（`text-mapping-tables.md` P2）：初稿里的全局阈值 `max_per_word` / `max_hosts` /
+> `min_word_chars` 与 `categories` 开关已撤掉。改为 `[[input.emoji.tables]]` 挂载多张表，每张表的
+> 阈值写在表文件自己的 `[meta]`（emoji 词表仍是每词 3 个、只扩首选、单字不触发），分类表是其中
+> 一张 `enabled = false` 的表。下文提到这几个键的地方按「对应表的 `[meta]`」理解。
 
 ⛔ 初稿还有 `learn_freq = false`（emoji 是否参与调频），**已撤掉**：emoji 在
 `apply_freq_rerank` 之后才插进列表，词频读端永远看不到它，记下来没有任何排序效果，只会
